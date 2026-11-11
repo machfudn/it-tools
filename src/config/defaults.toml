@@ -1,0 +1,104 @@
+version = 1
+
+[rules.visual_effects]
+enabled = true
+animations = false
+transparency = false
+
+[rules.diagnostics]
+enabled = true
+optional_data = false
+feedback_frequency = "never"
+
+[rules.search]
+enabled = true
+msa_cloud_search = false
+work_school_search = false
+search_highlights = false
+
+[rules.typing]
+enabled = true
+autocorrect = false
+highlight_misspelled = false
+text_prediction = false
+typing_insights = false
+voice_typing_key = false
+multilingual = false
+auto_shift = false
+double_tap_space = false
+
+[rules.taskbar]
+enabled = true
+widgets = false
+alignment = "left"
+auto_hide = true
+show_badges = false
+show_flashing = false
+
+[rules.power]
+enabled = true
+hibernate = false
+scheme = "high_performance"
+disk_timeout_ac_min = 0
+disk_timeout_dc_min = 0
+min_cpu_ac_pct = 100
+min_cpu_dc_pct = 50
+power_button_ac = "shutdown"
+power_button_dc = "shutdown"
+lid_close_ac = "sleep"
+lid_close_dc = "sleep"
+display_timeout_ac_min = 5
+display_timeout_dc_min = 5
+sleep_timeout_ac_min = 0
+sleep_timeout_dc_min = 10
+
+[rules.screensaver]
+enabled = true
+active = true
+scr_exe = '%SystemRoot%\System32\scrnsave.scr'
+timeout_sec = 300
+require_logon = true
+
+[rules.accessibility]
+enabled = true
+printscreen_snipping = false
+
+[rules.edge]
+enabled = true
+preload_new_tab = false
+prelaunch_startup = false
+tab_preloading = false
+block_pua = true
+
+[rules.system_restore]
+enabled = true
+drive = "C:"
+enable = true
+max_size = "5GB"
+
+[rules.password_policy]
+enabled = true
+password_history = 2
+max_password_age_days = 90
+min_password_length = 8
+complexity_enabled = true
+lockout_threshold = 7
+lockout_duration_min = 10
+lockout_reset_min = 10
+allow_admin_lockout = true
+
+[rules.defender_firewall]
+enabled = true
+defender_headless_ui = true
+defender_enabled = true
+firewall_profiles = ["domain", "private"]
+allow_icmp_echo = true
+allow_icmp_router = true
+
+[rules.startup_apps]
+enabled = true
+allowlist = ["OpenVPN GUI", "SecurityHealth"]
+
+[update]
+allow_beta = false
+# repo = "owner/repo"
