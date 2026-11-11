@@ -1,0 +1,113 @@
+name: CI - Code Check & Portable Build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check-and-build:
+    name: Check, Test & Portable Build (Windows x64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify formatting (cargo fmt)
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy lints
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run unit and integration tests
+        run: cargo test
+
+      - name: Build static portable release executable
+        shell: pwsh
+        env:
+          IT_TOOLS_CHANNEL: ${{ (github.ref_name == 'main' || github.ref_name == 'master') && 'stable' || 'beta' }}
+          IT_TOOLS_BUILD_NUMBER: ${{ github.run_number }}
+          IT_TOOLS_GITHUB_REPO: ${{ github.repository }}
+        run: |
+          $pkgVer = ((Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value)
+          if ($env:IT_TOOLS_CHANNEL -eq 'beta') {
+            $env:IT_TOOLS_DISPLAY_VERSION = "$pkgVer-ci.${{ github.run_number }}"
+          } else {
+            $env:IT_TOOLS_DISPLAY_VERSION = $pkgVer
+          }
+          cargo build --release
+
+      - name: Verify PE Version Properties & zero VC++ runtime imports
+        shell: pwsh
+        run: |
+          $exe = ".\target\release\it-tools.exe"
+          if (-not (Test-Path $exe)) { throw "Missing $exe" }
+
+          $vi = (Get-Item $exe).VersionInfo
+          $vi | Select-Object ProductName, ProductVersion, FileVersion, FileDescription, OriginalFilename, Comments | Format-List
+          if ($vi.ProductName -ne "IT-Tools") { throw "Unexpected ProductName: $($vi.ProductName)" }
+          if ($vi.OriginalFilename -ne "it-tools.exe") { throw "Unexpected OriginalFilename: $($vi.OriginalFilename)" }
+          if ([string]::IsNullOrWhiteSpace($vi.FileVersion)) { throw "Missing FileVersion" }
+
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $dumpbin = $null
+          if (Test-Path $vswhere) {
+            $vsPath = & $vswhere -latest -property installationPath
+            $dumpbin = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" -Recurse -Filter "dumpbin.exe" -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match 'Hostx64\\x64' } |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+          if ($dumpbin) {
+            $imports = (& $dumpbin /IMPORTS $exe | Out-String)
+            if ($imports -match 'VCRUNTIME140|MSVCP140') {
+              throw "Portable binary must not import dynamic VC++ runtime DLLs"
+            }
+            Write-Host "PE static CRT check passed via dumpbin.exe"
+          } else {
+            $raw = [System.IO.File]::ReadAllText($exe, [System.Text.Encoding]::ASCII)
+            if ($raw -match 'VCRUNTIME140\.dll|MSVCP140\.dll') {
+              throw "Portable binary references dynamic VC++ runtime DLLs"
+            }
+            Write-Host "PE static CRT check passed via ASCII scan"
+          }
+
+      - name: Run non-mutating CLI smoke tests
+        shell: pwsh
+        run: |
+          $exe = ".\target\release\it-tools.exe"
+          & $exe --version
+          & $exe --help | Out-Null
+          & $exe update --help | Out-Null
+
+          $tmpCfg = Join-Path $env:TEMP "it-tools-ci.toml"
+          & $exe config init --out $tmpCfg --force
+          & $exe --config $tmpCfg config validate
+          Remove-Item $tmpCfg -ErrorAction SilentlyContinue
+
+          & $exe check --json | Out-Null
+          & $exe apply --dry-run --json | Out-Null
+
+      - name: Upload CI preview portable executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: it-tools-ci-windows-x64
+          path: target/release/it-tools.exe
+          retention-days: 7

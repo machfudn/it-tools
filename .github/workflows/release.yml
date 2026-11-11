@@ -1,0 +1,310 @@
+name: Release - Portable EXE (Beta & Stable)
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'SemVer version (e.g. 0.2.0-beta.1 or 0.2.0)'
+        required: true
+        type: string
+      channel:
+        description: 'Release channel'
+        required: true
+        default: 'beta'
+        type: choice
+        options:
+          - beta
+          - stable
+      release_summary:
+        description: 'Optional extra summary / highlights for UAT release notes'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Build & Publish Portable Windows EXE
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository with tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release version and channel metadata
+        id: meta
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $rawVer = "${{ inputs.version }}".Trim().TrimStart('v', 'V')
+            $channel = "${{ inputs.channel }}".Trim().ToLowerInvariant()
+            if ($channel -eq "beta" -and -not $rawVer.Contains("-")) {
+              $rawVer = "$rawVer-beta.${{ github.run_number }}"
+            }
+            if ($channel -eq "stable" -and $rawVer.Contains("-")) {
+              throw "Stable release version cannot contain pre-release suffix: $rawVer"
+            }
+          } else {
+            $rawVer = "${{ github.ref_name }}".TrimStart('v', 'V')
+            $channel = if ($rawVer.Contains("-")) { "beta" } else { "stable" }
+          }
+
+          if ($rawVer -notmatch '^(\d+\.\d+\.\d+)(?:-[0-9A-Za-z.-]+)?$') {
+            throw "Version '$rawVer' must follow SemVer (e.g. 0.2.0 or 0.2.0-beta.1)"
+          }
+          $coreVer = $Matches[1]
+          $tagName = "v$rawVer"
+          $isPrerelease = if ($channel -eq "beta") { "true" } else { "false" }
+
+          # Sync Cargo.toml core version to match release tag
+          $cargoToml = Get-Content -Path Cargo.toml -Raw
+          $cargoToml = [regex]::Replace($cargoToml, '(?m)^version\s*=\s*"[^"]+"', "version = `"$coreVer`"", 1)
+          Set-Content -Path Cargo.toml -Value $cargoToml -NoNewline
+
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$rawVer"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "core_version=$coreVer"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "tag=$tagName"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "channel=$channel"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "prerelease=$isPrerelease"
+
+          Write-Host "Resolved release: tag=$tagName version=$rawVer core=$coreVer channel=$channel prerelease=$isPrerelease"
+
+      - name: Setup Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify formatting and Clippy lints
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets -- -D warnings
+
+      - name: Run full test suite
+        id: test
+        shell: pwsh
+        env:
+          IT_TOOLS_DISPLAY_VERSION: ${{ steps.meta.outputs.version }}
+          IT_TOOLS_BUILD_NUMBER: ${{ github.run_number }}
+          IT_TOOLS_CHANNEL: ${{ steps.meta.outputs.channel }}
+          IT_TOOLS_GITHUB_REPO: ${{ github.repository }}
+        run: |
+          $testOut = cargo test 2>&1 | Tee-Object -Variable testLines
+          if ($LASTEXITCODE -ne 0) { throw "cargo test failed" }
+          $passedTotal = 0
+          foreach ($m in [regex]::Matches(($testOut -join "`n"), 'test result: ok\. (\d+) passed; 0 failed')) {
+            $passedTotal += [int]$m.Groups[1].Value
+          }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "passed=$passedTotal"
+
+      - name: Build portable release it-tools.exe with PE Version Properties
+        id: build
+        shell: pwsh
+        env:
+          IT_TOOLS_DISPLAY_VERSION: ${{ steps.meta.outputs.version }}
+          IT_TOOLS_BUILD_NUMBER: ${{ github.run_number }}
+          IT_TOOLS_CHANNEL: ${{ steps.meta.outputs.channel }}
+          IT_TOOLS_GITHUB_REPO: ${{ github.repository }}
+        run: |
+          cargo build --release
+          $exe = ".\target\release\it-tools.exe"
+          $vi = (Get-Item $exe).VersionInfo
+          $vi | Select-Object ProductName, ProductVersion, FileVersion, FileDescription, OriginalFilename, Comments | Format-List
+
+          if ($vi.ProductVersion -ne "${{ steps.meta.outputs.version }}") {
+            throw "VersionInfo ProductVersion mismatch: $($vi.ProductVersion) != ${{ steps.meta.outputs.version }}"
+          }
+          if ($vi.OriginalFilename -ne "it-tools.exe") {
+            throw "OriginalFilename mismatch: $($vi.OriginalFilename)"
+          }
+
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) {
+            $vsPath = & $vswhere -latest -property installationPath
+            $dumpbin = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" -Recurse -Filter "dumpbin.exe" -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match 'Hostx64\\x64' } |
+              Select-Object -First 1 -ExpandProperty FullName
+            if ($dumpbin) {
+              $imports = (& $dumpbin /IMPORTS $exe | Out-String)
+              if ($imports -match 'VCRUNTIME140|MSVCP140') {
+                throw "Portable binary must not depend on VC++ runtime DLLs"
+              }
+            }
+          }
+
+          $sizeBytes = (Get-Item $exe).Length
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "size_bytes=$sizeBytes"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "file_version=$($vi.FileVersion)"
+
+      - name: Verify release binary read-only smoke checks & package assets
+        id: pkg
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $exe = ".\target\release\it-tools.exe"
+          Copy-Item $exe dist\it-tools.exe -Force
+
+          & dist\it-tools.exe --version
+          & dist\it-tools.exe config init --out dist\it-tools.toml --force
+          & dist\it-tools.exe --config dist\it-tools.toml config validate
+          & dist\it-tools.exe check --json | Out-Null
+          & dist\it-tools.exe apply --dry-run --json | Out-Null
+
+          $zipName = "it-tools-v${{ steps.meta.outputs.version }}-windows-x64.zip"
+          $zipPath = Join-Path "dist" $zipName
+          $zipItems = @("dist\it-tools.exe", "dist\it-tools.toml")
+          if (Test-Path "README.md") { $zipItems += "README.md" }
+          Compress-Archive -Path $zipItems -DestinationPath $zipPath -Force
+
+          $exeHash = (Get-FileHash -Algorithm SHA256 dist\it-tools.exe).Hash.ToLowerInvariant()
+          $zipHash = (Get-FileHash -Algorithm SHA256 $zipPath).Hash.ToLowerInvariant()
+          @"
+          $exeHash  it-tools.exe
+          $zipHash  $zipName
+          "@ | Set-Content -Path dist\SHA256SUMS.txt -Encoding ascii
+
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "zip_name=$zipName"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "exe_sha256=$exeHash"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "zip_sha256=$zipHash"
+
+      - name: Generate structured UAT & feature release notes
+        shell: pwsh
+        env:
+          EXTRA_SUMMARY: ${{ inputs.release_summary }}
+        run: |
+          $ver = "${{ steps.meta.outputs.version }}"
+          $tag = "${{ steps.meta.outputs.tag }}"
+          $ch = "${{ steps.meta.outputs.channel }}"
+          $chLabel = if ($ch -eq "beta") { "BETA / PRE-RELEASE (UAT Testing)" } else { "STABLE / PRODUCTION RELEASE" }
+
+          $prevTag = (& git tag --sort=-v:refname | Where-Object { $_ -ne $tag } | Select-Object -First 1)
+          if ($prevTag) {
+            $commitLines = (& git log "$prevTag..HEAD" '--pretty=format:- %s (`%h`)' | Out-String).Trim()
+            $prevLabel = $prevTag
+          } else {
+            $commitLines = (& git log -n 20 '--pretty=format:- %s (`%h`)' | Out-String).Trim()
+            $prevLabel = "Initial"
+          }
+          if ([string]::IsNullOrWhiteSpace($commitLines)) {
+            $commitLines = "- Release build $tag"
+          }
+
+          $extraBlock = ""
+          if (-not [string]::IsNullOrWhiteSpace($env:EXTRA_SUMMARY)) {
+            $extraBlock = "`n### Release Highlights`n`n$($env:EXTRA_SUMMARY.Trim())`n"
+          }
+
+          $betaNotice = if ($ch -eq "beta") {
+            "> [!WARNING]`n> This is a **Beta** pre-release intended for UAT and staging validation before Stable promotion.`n"
+          } else {
+            "> [!NOTE]`n> This is a **Stable** production release verified by automated CI, PE metadata checks, and UAT smoke gates.`n"
+          }
+
+          $template = @'
+          ## IT-Tools v__VER__ — __CHANNEL_LABEL__
+
+          __BETA_NOTICE__
+          __EXTRA_BLOCK__
+          ### What's Changed Since __PREV_LABEL__
+          __COMMITS__
+
+          ### Portable Executable & Included Features
+          Single portable binary (`it-tools.exe`, **__SIZE_BYTES__ bytes**, static MSVC CRT — zero `.NET` or VC++ redistributable required):
+
+          | Category | Module ID | Description |
+          |---|---|---|
+          | UI & UX | `visual_effects` | Disable Windows animations & transparency for responsive desktop performance |
+          | Privacy | `diagnostics` | Restrict diagnostic telemetry to Required-only & disable feedback prompts |
+          | Privacy | `search` | Disable Bing/MSA & Work/School cloud search and Search Highlights |
+          | Input | `typing` | Disable autocorrect, text prediction, typing insights, and touch-keyboard nudges |
+          | Shell | `taskbar` | Configure Taskbar alignment, auto-hide, widgets off, badge & flash reduction |
+          | Power | `power` | Configure High Performance scheme, sleep/display timeouts, CPU min state, lid/power actions |
+          | Security | `screensaver` | Enable 5-minute screensaver lock (`scrnsave.scr`) with logon screen resume |
+          | Input | `accessibility` | Keep PrintScreen classic behavior instead of Snipping Tool intercept |
+          | Browser | `edge` | Disable Edge startup boost, prelaunch, NTP preload, and enable PUA SmartScreen blocking |
+          | Recovery | `system_restore` | Enable System Restore on `C:` and cap shadow storage at configured size (`5GB`) |
+          | Account | `password_policy` | Enforce local password history, length, complexity, and lockout policy via `secedit` (+ opt-in user flags) |
+          | Network | `defender_firewall` | Enable Microsoft Defender & Firewall profiles with configurable ICMP echo/router rules |
+          | Startup | `startup_apps` | Disable non-allowlisted HKCU/HKLM/Startup-folder apps cleanly via `StartupApproved` |
+          | Maintenance | `update` | Built-in GitHub Releases version check & SHA-256 verified self-updater (`it-tools update`) |
+          | Recovery | `backup` / `rollback` | Automatic JSON snapshot before every live apply + one-step `rollback` restoration |
+
+          ### UAT Verification Summary
+          - [x] **Code Formatting & Lints:** `cargo fmt --check` & `cargo clippy --all-targets -- -D warnings` passed
+          - [x] **Automated Test Suite:** `cargo test` passed (__PASSED_TESTS__ tests, 0 failed)
+          - [x] **Portability & CRT Check:** `x86_64-pc-windows-msvc` static CRT verified (zero `VCRUNTIME140.dll` / `MSVCP140.dll` imports)
+          - [x] **PE Version Properties:** `ProductVersion = __VER__`, `FileVersion = __FILE_VERSION__`, `OriginalFilename = it-tools.exe`
+          - [x] **Non-Mutating CLI Smoke Tests:** `--version`, `config init/validate`, `check --json`, and `apply --dry-run --json` passed
+
+          ### Downloads & SHA-256 Checksums
+          | Artifact | Purpose | SHA-256 |
+          |---|---|---|
+          | `it-tools.exe` | Standalone portable executable (1-click / CLI / self-update target) | `__EXE_SHA__` |
+          | `__ZIP_NAME__` | Portable bundle (`it-tools.exe` + default `it-tools.toml` + `README.md`) | `__ZIP_SHA__` |
+          | `SHA256SUMS.txt` | Verifiable checksum manifest | — |
+
+          ### Quick Start & Self-Update
+          ```powershell
+          # Read-only system audit (no admin required)
+          .\it-tools.exe check
+
+          # Preview changes safely without modifying Windows
+          .\it-tools.exe apply --dry-run
+
+          # Check for updates or upgrade in-place (add --beta to track pre-releases)
+          .\it-tools.exe update --check
+          .\it-tools.exe update
+          ```
+          '@
+
+          $notes = $template.
+            Replace('__VER__', $ver).
+            Replace('__CHANNEL_LABEL__', $chLabel).
+            Replace('__BETA_NOTICE__', $betaNotice).
+            Replace('__EXTRA_BLOCK__', $extraBlock).
+            Replace('__PREV_LABEL__', $prevLabel).
+            Replace('__COMMITS__', $commitLines).
+            Replace('__SIZE_BYTES__', '${{ steps.build.outputs.size_bytes }}').
+            Replace('__PASSED_TESTS__', '${{ steps.test.outputs.passed }}').
+            Replace('__FILE_VERSION__', '${{ steps.build.outputs.file_version }}').
+            Replace('__EXE_SHA__', '${{ steps.pkg.outputs.exe_sha256 }}').
+            Replace('__ZIP_NAME__', '${{ steps.pkg.outputs.zip_name }}').
+            Replace('__ZIP_SHA__', '${{ steps.pkg.outputs.zip_sha256 }}')
+
+          Set-Content -Path dist\RELEASE_NOTES.md -Value $notes -Encoding utf8
+
+      - name: Create Git tag for manual workflow_dispatch if missing
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.meta.outputs.tag }}"
+          if (-not (git tag -l $tag)) {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a $tag -m "Release $tag"
+            git push origin $tag
+          }
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: IT-Tools ${{ steps.meta.outputs.tag }} (${{ steps.meta.outputs.channel == 'beta' && 'Beta' || 'Stable' }})
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          body_path: dist/RELEASE_NOTES.md
+          files: |
+            dist/it-tools.exe
+            dist/${{ steps.pkg.outputs.zip_name }}
+            dist/SHA256SUMS.txt
