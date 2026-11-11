@@ -93,18 +93,23 @@ jobs:
         shell: pwsh
         run: |
           $exe = ".\target\release\it-tools.exe"
-          & $exe --version
-          & $exe --help | Out-Null
-          & $exe update --help | Out-Null
-
           $tmpCfg = Join-Path $env:TEMP "it-tools-ci.toml"
-          & $exe config init --out $tmpCfg --force
-          & $exe --config $tmpCfg config validate
+          foreach ($cmdArgs in @(
+            @('--version'),
+            @('--help'),
+            @('update', '--help'),
+            @('config', 'init', '--out', $tmpCfg, '--force'),
+            @('--config', $tmpCfg, 'config', 'validate'),
+            @('check', '--json'),
+            @('apply', '--dry-run', '--json')
+          )) {
+            & $exe @cmdArgs | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+              throw "Smoke check failed ($($cmdArgs -join ' ')) with exit code $LASTEXITCODE"
+            }
+          }
+          & $exe --version
           Remove-Item $tmpCfg -ErrorAction SilentlyContinue
-
-          & $exe check --json | Out-Null
-          & $exe apply --dry-run --json | Out-Null
-
       - name: Upload CI preview portable executable
         uses: actions/upload-artifact@v4
         with:

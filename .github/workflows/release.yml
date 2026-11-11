@@ -2,6 +2,7 @@ name: Release - Portable EXE (Beta & Stable)
 
 on:
   push:
+    branches: [main, master]
     tags:
       - 'v*.*.*'
   workflow_dispatch:
@@ -27,12 +28,17 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   release:
     name: Build & Publish Portable Windows EXE
+    if: github.event_name != 'push' || github.ref_type == 'tag' || !contains(github.event.head_commit.message, '[skip release]')
     runs-on: windows-latest
     steps:
       - name: Checkout repository with tags
@@ -53,11 +59,14 @@ jobs:
             if ($channel -eq "stable" -and $rawVer.Contains("-")) {
               throw "Stable release version cannot contain pre-release suffix: $rawVer"
             }
-          } else {
+          } elseif ("${{ github.ref_type }}" -eq "tag") {
             $rawVer = "${{ github.ref_name }}".TrimStart('v', 'V')
             $channel = if ($rawVer.Contains("-")) { "beta" } else { "stable" }
+          } else {
+            $pkgVer = ((Select-String -Path Cargo.toml -Pattern '^\s*version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value).Trim()
+            $rawVer = "$pkgVer-beta.${{ github.run_number }}"
+            $channel = "beta"
           }
-
           if ($rawVer -notmatch '^(\d+\.\d+\.\d+)(?:-[0-9A-Za-z.-]+)?$') {
             throw "Version '$rawVer' must follow SemVer (e.g. 0.2.0 or 0.2.0-beta.1)"
           }
@@ -65,11 +74,10 @@ jobs:
           $tagName = "v$rawVer"
           $isPrerelease = if ($channel -eq "beta") { "true" } else { "false" }
 
-          # Sync Cargo.toml core version to match release tag
+          # Sync Cargo.toml [package] version (first match only) to match release tag
           $cargoToml = Get-Content -Path Cargo.toml -Raw
-          $cargoToml = [regex]::Replace($cargoToml, '(?m)^version\s*=\s*"[^"]+"', "version = `"$coreVer`"", 1)
+          $cargoToml = ([regex]'(?m)^version\s*=\s*"[^"]+"').Replace($cargoToml, "version = `"$coreVer`"", 1)
           Set-Content -Path Cargo.toml -Value $cargoToml -NoNewline
-
           Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$rawVer"
           Add-Content -Path $env:GITHUB_OUTPUT -Value "core_version=$coreVer"
           Add-Content -Path $env:GITHUB_OUTPUT -Value "tag=$tagName"
@@ -87,10 +95,11 @@ jobs:
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Verify formatting and Clippy lints
-        run: |
-          cargo fmt --all -- --check
-          cargo clippy --all-targets -- -D warnings
+      - name: Verify formatting (cargo fmt)
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy lints
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Run full test suite
         id: test
@@ -101,14 +110,19 @@ jobs:
           IT_TOOLS_CHANNEL: ${{ steps.meta.outputs.channel }}
           IT_TOOLS_GITHUB_REPO: ${{ github.repository }}
         run: |
-          $testOut = cargo test 2>&1 | Tee-Object -Variable testLines
-          if ($LASTEXITCODE -ne 0) { throw "cargo test failed" }
+          $PSNativeCommandUseErrorActionPreference = $false
+          $prevErrPref = $ErrorActionPreference
+          $ErrorActionPreference = 'Continue'
+          $testOut = cargo test 2>&1
+          $exitCode = $LASTEXITCODE
+          $ErrorActionPreference = $prevErrPref
+          $testOut | ForEach-Object { Write-Host $_ }
+          if ($exitCode -ne 0) { throw "cargo test failed with exit code $exitCode" }
           $passedTotal = 0
           foreach ($m in [regex]::Matches(($testOut -join "`n"), 'test result: ok\. (\d+) passed; 0 failed')) {
             $passedTotal += [int]$m.Groups[1].Value
           }
           Add-Content -Path $env:GITHUB_OUTPUT -Value "passed=$passedTotal"
-
       - name: Build portable release it-tools.exe with PE Version Properties
         id: build
         shell: pwsh
@@ -156,12 +170,19 @@ jobs:
           $exe = ".\target\release\it-tools.exe"
           Copy-Item $exe dist\it-tools.exe -Force
 
+          foreach ($cmdArgs in @(
+            @('--version'),
+            @('config', 'init', '--out', 'dist\it-tools.toml', '--force'),
+            @('--config', 'dist\it-tools.toml', 'config', 'validate'),
+            @('check', '--json'),
+            @('apply', '--dry-run', '--json')
+          )) {
+            & dist\it-tools.exe @cmdArgs | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+              throw "Smoke check failed ($($cmdArgs -join ' ')) with exit code $LASTEXITCODE"
+            }
+          }
           & dist\it-tools.exe --version
-          & dist\it-tools.exe config init --out dist\it-tools.toml --force
-          & dist\it-tools.exe --config dist\it-tools.toml config validate
-          & dist\it-tools.exe check --json | Out-Null
-          & dist\it-tools.exe apply --dry-run --json | Out-Null
-
           $zipName = "it-tools-v${{ steps.meta.outputs.version }}-windows-x64.zip"
           $zipPath = Join-Path "dist" $zipName
           $zipItems = @("dist\it-tools.exe", "dist\it-tools.toml")
@@ -189,7 +210,7 @@ jobs:
           $ch = "${{ steps.meta.outputs.channel }}"
           $chLabel = if ($ch -eq "beta") { "BETA / PRE-RELEASE (UAT Testing)" } else { "STABLE / PRODUCTION RELEASE" }
 
-          $prevTag = (& git tag --sort=-v:refname | Where-Object { $_ -ne $tag } | Select-Object -First 1)
+          $prevTag = (& git for-each-ref --sort=-creatordate --format='%(refname:short)' refs/tags | Where-Object { $_ -ne $tag } | Select-Object -First 1)
           if ($prevTag) {
             $commitLines = (& git log "$prevTag..HEAD" '--pretty=format:- %s (`%h`)' | Out-String).Trim()
             $prevLabel = $prevTag
@@ -285,22 +306,11 @@ jobs:
 
           Set-Content -Path dist\RELEASE_NOTES.md -Value $notes -Encoding utf8
 
-      - name: Create Git tag for manual workflow_dispatch if missing
-        if: github.event_name == 'workflow_dispatch'
-        shell: pwsh
-        run: |
-          $tag = "${{ steps.meta.outputs.tag }}"
-          if (-not (git tag -l $tag)) {
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a $tag -m "Release $tag"
-            git push origin $tag
-          }
-
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: IT-Tools ${{ steps.meta.outputs.tag }} (${{ steps.meta.outputs.channel == 'beta' && 'Beta' || 'Stable' }})
           prerelease: ${{ steps.meta.outputs.prerelease }}
           body_path: dist/RELEASE_NOTES.md
