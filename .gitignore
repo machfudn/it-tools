@@ -1,0 +1,8 @@
+/target/
+**/*.rs.bk
+*.pdb
+*.old
+it-tools.backup.*.json
+it-tools.toml
+.hermes/plans/
+docs/superpowers/specs/
