@@ -109,7 +109,7 @@ impl TuiApp {
             config_dirty: false,
             check_report,
             selected_idx: 0,
-            status_banner: "Ready. [Space] Toggle  [e] Edit  [u] User  [p] Dry-Run  [a] Apply  [s] Save  [b] Rollback  [v] Updates  [q] Quit".into(),
+            status_banner: "[Spasi] Aktif [e] Ubah [u] Akun [p] Simulasi [a] Terapkan [s] Simpan [b] Pulih [v] Update [d] Dok [q] Keluar".into(),
             modal: Modal::None,
             user_target: None,
             relaunch_args,
@@ -414,7 +414,7 @@ impl TuiApp {
                     }
                     KeyCode::Char('c') => {
                         self.user_target = None;
-                        self.status_banner = "Cleared opt-in user target.".into();
+                        self.status_banner = "Target akun opsional dikosongkan.".into();
                     }
                     KeyCode::Enter => {
                         if matches!(
@@ -440,7 +440,7 @@ impl TuiApp {
                             if !create_name.trim().is_empty() {
                                 if pw_opt.is_none() {
                                     self.status_banner =
-                                        "New user requires non-empty temporary password.".into();
+                                        "Akun baru wajib memiliki kata sandi sementara yang tidak kosong.".into();
                                     self.modal = Modal::UserPicker {
                                         users,
                                         cursor,
@@ -459,7 +459,7 @@ impl TuiApp {
                                     temp_password: pw_opt,
                                 });
                                 self.status_banner =
-                                    format!("User target: create '{}'", create_name.trim());
+                                    format!("Target akun: buat '{}'", create_name.trim());
                             } else if let Some(u) = users.get(cursor) {
                                 self.user_target = Some(UserTargetOptions {
                                     username: u.name.clone(),
@@ -467,7 +467,7 @@ impl TuiApp {
                                     clear_dont_expire,
                                     temp_password: pw_opt,
                                 });
-                                self.status_banner = format!("User target: '{}'", u.name);
+                                self.status_banner = format!("Target akun: '{}'", u.name);
                             }
                         }
                     }
@@ -516,7 +516,7 @@ impl TuiApp {
                         ..Default::default()
                     };
                     let report = apply_rules(ops, &self.cfg, rules, &opts, &self.exe_dir)?;
-                    self.show_run_report("Apply (HKCU-Only)", &report);
+                    self.show_run_report("Terapkan (Khusus HKCU)", &report);
                     self.refresh_check(ops, rules)?;
                     Ok(TuiEffect::Continue)
                 }
@@ -545,7 +545,7 @@ impl TuiApp {
                         let snap = BackupSnapshot::load_from_file(path)?;
                         let actions = rollback_snapshot(ops, &snap)?;
                         self.modal = Modal::ReportView {
-                            title: format!("Rollback: {}", path.display()),
+                            title: format!("Pemulihan: {}", path.display()),
                             lines: actions,
                             scroll: 0,
                         };
@@ -577,6 +577,25 @@ impl TuiApp {
                     if (scroll as usize) + 1 < lines.len() {
                         scroll += 1;
                     }
+                    self.modal = Modal::ReportView {
+                        title,
+                        lines,
+                        scroll,
+                    };
+                    Ok(TuiEffect::Continue)
+                }
+                KeyCode::PageUp => {
+                    scroll = scroll.saturating_sub(10);
+                    self.modal = Modal::ReportView {
+                        title,
+                        lines,
+                        scroll,
+                    };
+                    Ok(TuiEffect::Continue)
+                }
+                KeyCode::PageDown => {
+                    let max_scroll = lines.len().saturating_sub(1) as u16;
+                    scroll = (scroll.saturating_add(10)).min(max_scroll);
                     self.modal = Modal::ReportView {
                         title,
                         lines,
@@ -617,10 +636,12 @@ impl TuiApp {
                     toggle_rule_enabled(&mut self.cfg, &id);
                     self.config_dirty = true;
                     self.refresh_check(ops, rules)?;
-                    self.status_banner = format!(
-                        "Toggled '{id}' enabled={}.",
-                        is_rule_enabled(&self.cfg, &id)
-                    );
+                    let state_lbl = if is_rule_enabled(&self.cfg, &id) {
+                        "diaktifkan"
+                    } else {
+                        "dinonaktifkan"
+                    };
+                    self.status_banner = format!("Modul '{id}' {state_lbl}.");
                 }
             }
             KeyCode::Char('e') | KeyCode::Enter => {
@@ -650,11 +671,12 @@ impl TuiApp {
                 self.cfg.validate()?;
                 self.cfg.save_toml(&self.config_path)?;
                 self.config_dirty = false;
-                self.status_banner = format!("Saved config to {}", self.config_path.display());
+                self.status_banner =
+                    format!("Konfigurasi disimpan ke {}", self.config_path.display());
             }
             KeyCode::Char('r') => {
                 self.refresh_check(ops, rules)?;
-                self.status_banner = "Compliance check refreshed.".into();
+                self.status_banner = "Pemeriksaan kepatuhan disegarkan.".into();
             }
             KeyCode::Char('p') => {
                 let opts = ApplyOptions {
@@ -663,7 +685,7 @@ impl TuiApp {
                     ..Default::default()
                 };
                 let rep = apply_rules(ops, &self.cfg, rules, &opts, &self.exe_dir)?;
-                self.show_run_report("Dry-Run Diff Preview", &rep);
+                self.show_run_report("Pratinjau Perubahan (Simulasi)", &rep);
             }
             KeyCode::Char('a') => {
                 let needs_admin = rules
@@ -678,13 +700,17 @@ impl TuiApp {
             KeyCode::Char('b') => {
                 let files = list_backup_files(&self.exe_dir)?;
                 if files.is_empty() {
-                    self.status_banner = "No it-tools.backup.*.json files found beside exe.".into();
+                    self.status_banner =
+                        "File backup it-tools.backup.*.json tidak ditemukan di dekat exe.".into();
                 } else {
                     self.modal = Modal::RollbackPicker { files, cursor: 0 };
                 }
             }
             KeyCode::Char('v') => {
                 self.check_updates_modal(ops);
+            }
+            KeyCode::Char('d') | KeyCode::Char('D') => {
+                self.open_docs_modal();
             }
             _ => {}
         }
@@ -709,13 +735,13 @@ impl TuiApp {
             .map(str::to_string)
         else {
             self.modal = Modal::ReportView {
-                title: "Version & Updates".into(),
+                title: "Versi & Pembaruan".into(),
                 lines: vec![
-                    format!("Installed Version : {cur}"),
-                    format!("Release Channel   : {ch}"),
+                    format!("Versi Terpasang : {cur}"),
+                    format!("Kanal Rilis     : {ch}"),
                     String::new(),
-                    "No GitHub repository configured in this build.".into(),
-                    "Set [update] repo = \"owner/repo\" in it-tools.toml or run:".into(),
+                    "Repositori GitHub belum dikonfigurasi pada build ini.".into(),
+                    "Atur [update] repo = \"owner/repo\" di it-tools.toml atau jalankan:".into(),
                     "  it-tools update --check --repo owner/repo".into(),
                 ],
                 scroll: 0,
@@ -726,44 +752,52 @@ impl TuiApp {
         match check_for_update(ops, &repo, ch) {
             Ok(res) => {
                 let mut lines = vec![
-                    format!("Repository        : {repo}"),
-                    format!("Installed Version : {}", res.current_version),
-                    format!("Latest ({:<6})   : {}", res.channel, res.latest_version),
+                    format!("Repositori      : {repo}"),
+                    format!("Versi Terpasang : {}", res.current_version),
+                    format!("Terbaru ({:<6}): {}", res.channel, res.latest_version),
                     format!(
-                        "Status            : {}",
+                        "Status          : {}",
                         if res.update_available {
-                            "UPDATE AVAILABLE (run `it-tools update` in terminal)"
+                            "PEMBARUAN TERSEDIA (jalankan `it-tools update` di terminal)"
                         } else {
-                            "UP TO DATE"
+                            "SUDAH MUTAKHIR"
                         }
                     ),
                 ];
                 if !res.html_url.is_empty() {
-                    lines.push(format!("URL               : {}", res.html_url));
+                    lines.push(format!("URL             : {}", res.html_url));
                 }
                 if !res.release_notes.trim().is_empty() {
                     lines.push(String::new());
-                    lines.push("--- Release Notes ---".into());
+                    lines.push("--- Catatan Rilis ---".into());
                     lines.extend(res.release_notes.lines().map(str::to_string));
                 }
                 self.modal = Modal::ReportView {
-                    title: "Version & Updates".into(),
+                    title: "Versi & Pembaruan".into(),
                     lines,
                     scroll: 0,
                 };
             }
             Err(e) => {
                 self.modal = Modal::ReportView {
-                    title: "Version & Updates (Check Failed)".into(),
+                    title: "Versi & Pembaruan (Gagal Cek)".into(),
                     lines: vec![
-                        format!("Installed Version : {cur}"),
-                        format!("Repository        : {repo}"),
-                        format!("Error             : {e:#}"),
+                        format!("Versi Terpasang : {cur}"),
+                        format!("Repositori      : {repo}"),
+                        format!("Galat           : {e:#}"),
                     ],
                     scroll: 0,
                 };
             }
         }
+    }
+
+    fn open_docs_modal(&mut self) {
+        self.modal = Modal::ReportView {
+            title: "Dokumentasi & Glosarium Istilah".into(),
+            lines: documentation_lines(),
+            scroll: 0,
+        };
     }
 
     fn execute_apply(
@@ -778,7 +812,7 @@ impl TuiApp {
             ..Default::default()
         };
         let rep = apply_rules(ops, &self.cfg, rules, &opts, &self.exe_dir)?;
-        self.show_run_report("Apply Results", &rep);
+        self.show_run_report("Hasil Penerapan", &rep);
         self.refresh_check(ops, rules)?;
         Ok(())
     }
@@ -786,18 +820,22 @@ impl TuiApp {
     fn show_run_report(&mut self, title: &str, rep: &RunReport) {
         let mut lines = Vec::new();
         if let Some(bk) = &rep.backup_file {
-            lines.push(format!("Backup saved: {}", bk.display()));
+            lines.push(format!("Backup tersimpan: {}", bk.display()));
             lines.push(String::new());
         }
         for e in &rep.entries {
             let tag = match &e.outcome {
-                RuleOutcome::Applied => "APPLIED".into(),
-                RuleOutcome::AlreadyCompliant => "COMPLIANT".into(),
-                RuleOutcome::WarnTamperProtected { detail } => format!("WARN TAMPER: {detail}"),
-                RuleOutcome::WarnFirmwareLocked { detail } => format!("WARN FIRMWARE: {detail}"),
-                RuleOutcome::WarnEdgeRunning { detail } => format!("WARN EDGE: {detail}"),
-                RuleOutcome::Skipped { reason } => format!("SKIPPED: {reason}"),
-                RuleOutcome::Failed { error } => format!("FAILED: {error}"),
+                RuleOutcome::Applied => "DITERAPKAN".into(),
+                RuleOutcome::AlreadyCompliant => "SUDAH SESUAI".into(),
+                RuleOutcome::WarnTamperProtected { detail } => {
+                    format!("PERINGATAN TAMPER: {detail}")
+                }
+                RuleOutcome::WarnFirmwareLocked { detail } => {
+                    format!("PERINGATAN FIRMWARE: {detail}")
+                }
+                RuleOutcome::WarnEdgeRunning { detail } => format!("PERINGATAN EDGE: {detail}"),
+                RuleOutcome::Skipped { reason } => format!("DILEWATI: {reason}"),
+                RuleOutcome::Failed { error } => format!("GAGAL: {error}"),
             };
             lines.push(format!("[{}] {}", e.id, tag));
             for c in &e.changes {
@@ -826,7 +864,7 @@ pub fn run_tui(
 ) -> Result<i32> {
     if !ops.is_console_tty() {
         eprintln!(
-            "TUI requires Windows Console / Windows Terminal. Use CLI subcommands (check, apply, rollback, config) or run via winpty / Windows Terminal."
+            "TUI membutuhkan Windows Console / Windows Terminal. Gunakan subcommand CLI (check, apply, rollback, config) atau jalankan lewat winpty / Windows Terminal."
         );
         return Ok(EXIT_NO_CONSOLE);
     }
@@ -865,8 +903,8 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
             .constraints([
                 Constraint::Length(9),
                 Constraint::Length(3),
-                Constraint::Min(7),
-                Constraint::Length(3),
+                Constraint::Min(6),
+                Constraint::Length(4),
             ])
             .split(area);
         let banner = Paragraph::new(crate::APP_BANNER)
@@ -883,8 +921,8 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),
-                Constraint::Min(8),
-                Constraint::Length(3),
+                Constraint::Min(7),
+                Constraint::Length(4),
             ])
             .split(area);
         (chunks[0], chunks[1], chunks[2])
@@ -900,14 +938,18 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
         )
     } else {
         Span::styled(
-            " STANDARD USER ",
+            " PENGGUNA STANDAR ",
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )
     };
-    let dirty_mark = if app.config_dirty { " [UNSAVED *]" } else { "" };
+    let dirty_mark = if app.config_dirty {
+        " [BELUM DISIMPAN *]"
+    } else {
+        ""
+    };
     let header = Paragraph::new(Line::from(vec![
         Span::styled(
             format!(" IT-Tools v{} ", current_display_version()),
@@ -917,7 +959,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
         ),
         admin_badge,
         Span::raw(format!(
-            "  {}  |  Config: {}{}",
+            "  {}  |  Konfigurasi: {}{}",
             app.check_report.os_caption,
             app.config_path.display(),
             dirty_mark
@@ -926,7 +968,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title("System & Profile"),
+            .title("Sistem & Profil"),
     );
     frame.render_widget(header, header_area);
 
@@ -941,18 +983,20 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
             let enabled = is_rule_enabled(&app.cfg, r.id());
             let mark = if enabled { "[x]" } else { "[ ]" };
             let status_span = if !enabled {
-                Span::styled("DISABLED", Style::default().fg(Color::DarkGray))
+                Span::styled("NONAKTIF", Style::default().fg(Color::DarkGray))
             } else if let Some(chk) = app.check_for(r.id()) {
                 match chk.status {
-                    CheckStatus::Compliant => Span::styled("OK", Style::default().fg(Color::Green)),
+                    CheckStatus::Compliant => {
+                        Span::styled("SESUAI", Style::default().fg(Color::Green))
+                    }
                     CheckStatus::Drifted => {
-                        Span::styled("DRIFT", Style::default().fg(Color::Yellow))
+                        Span::styled("BERUBAH", Style::default().fg(Color::Yellow))
                     }
                     CheckStatus::NeedsAdmin => {
                         Span::styled("ADMIN", Style::default().fg(Color::Red))
                     }
                     CheckStatus::Unsupported => {
-                        Span::styled("WARN", Style::default().fg(Color::Magenta))
+                        Span::styled("KENDALA", Style::default().fg(Color::Magenta))
                     }
                 }
             } else {
@@ -970,7 +1014,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Hardening Modules (13)"),
+                .title("Modul Pengamanan (13)"),
         )
         .highlight_style(
             Style::default()
@@ -987,33 +1031,37 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
             Style::default().add_modifier(Modifier::BOLD),
         )));
         detail_lines.push(Line::from(format!(
-            "Scope: {} | Enabled: {}",
+            "Cakupan: {} | Aktif: {}",
             if r.requires_admin() {
-                "Admin (HKLM/System)"
+                "Admin (HKLM/Sistem)"
             } else {
-                "Standard (HKCU)"
+                "Standar (HKCU)"
             },
-            is_rule_enabled(&app.cfg, r.id())
+            if is_rule_enabled(&app.cfg, r.id()) {
+                "Ya"
+            } else {
+                "Tidak"
+            }
         )));
         if let Some(ut) = &app.user_target {
             detail_lines.push(Line::from(format!(
-                "Opt-In User Target: {} ({})",
+                "Target Akun Opsional: {} ({})",
                 ut.username,
                 if ut.create_if_missing {
-                    "create"
+                    "buat baru"
                 } else {
-                    "existing"
+                    "sudah ada"
                 }
             )));
         }
         detail_lines.push(Line::from(""));
         detail_lines.push(Line::from(Span::styled(
-            "Current Diffs:",
+            "Perbedaan Saat Ini:",
             Style::default().fg(Color::Cyan),
         )));
         if let Some(chk) = app.check_for(r.id()) {
             if chk.diffs.is_empty() {
-                detail_lines.push(Line::from("  (none - compliant)"));
+                detail_lines.push(Line::from("  (tidak ada - sudah sesuai)"));
             } else {
                 for d in &chk.diffs {
                     detail_lines.push(Line::from(format!(
@@ -1023,10 +1071,10 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
                 }
             }
             if let Some(note) = &chk.note {
-                detail_lines.push(Line::from(format!("Note: {note}")));
+                detail_lines.push(Line::from(format!("Catatan: {note}")));
             }
         } else {
-            detail_lines.push(Line::from("  (rule disabled in config)"));
+            detail_lines.push(Line::from("  (modul dinonaktifkan di konfigurasi)"));
         }
     }
     let detail = Paragraph::new(detail_lines)
@@ -1034,12 +1082,13 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Module Inspector"),
+                .title("Inspektor Modul"),
         );
     frame.render_widget(detail, main_cols[1]);
 
     let footer = Paragraph::new(app.status_banner.as_str())
-        .block(Block::default().borders(Borders::ALL).title("Controls"));
+        .wrap(Wrap { trim: false })
+        .block(Block::default().borders(Borders::ALL).title("Kontrol"));
     frame.render_widget(footer, footer_area);
 
     draw_modal(frame, app);
@@ -1052,20 +1101,20 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
             let area = centered_rect(60, 30, frame.area());
             frame.render_widget(Clear, area);
             let p = Paragraph::new(
-                "Create automatic JSON backup snapshot beside exe and apply enabled rules?\n\n[Enter / y] Apply Now    [Esc / n] Cancel",
+                "Buat snapshot backup JSON otomatis di sebelah exe lalu terapkan modul yang aktif?\n\n[Enter / y] Terapkan Sekarang    [Esc / n] Batal",
             )
             .wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::ALL).title("Confirm Apply"));
+            .block(Block::default().borders(Borders::ALL).title("Konfirmasi Penerapan"));
             frame.render_widget(p, area);
         }
         Modal::ElevationPrompt => {
             let area = centered_rect(65, 36, frame.area());
             frame.render_widget(Clear, area);
             let p = Paragraph::new(
-                "One or more selected rules modify HKLM / Windows policies and require Administrator privileges.\n\n[E] Relaunch as Administrator (UAC)\n[O] Apply HKCU-only User Rules Now\n[Esc] Cancel",
+                "Satu atau lebih modul yang dipilih mengubah HKLM / kebijakan Windows dan membutuhkan hak Administrator.\n\n[E] Jalankan Ulang sebagai Administrator (UAC)\n[O] Terapkan Modul Pengguna (HKCU) Saja Sekarang\n[Esc] Batal",
             )
             .wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::ALL).title("Elevation Required"));
+            .block(Block::default().borders(Borders::ALL).title("Butuh Hak Administrator"));
             frame.render_widget(p, area);
         }
         Modal::EditFields {
@@ -1098,7 +1147,7 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title(format!("Edit {rule_id} ([Space/Enter] edit, [Esc] close)")),
+                        .title(format!("Ubah {rule_id} ([Spasi/Enter] ubah, [Esc] tutup)")),
                 )
                 .highlight_style(Style::default().bg(Color::Blue).fg(Color::White));
             frame.render_stateful_widget(list, area, &mut st);
@@ -1116,11 +1165,11 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
             frame.render_widget(Clear, area);
             let mut lines = vec![
                 Line::from(
-                    "Opt-in local account selection ([Tab] cycle field, [Enter] select/edit, [c] clear, [Esc] close):",
+                    "Pemilihan akun lokal opsional ([Tab] pindah kolom, [Enter] pilih/ubah, [c] kosongkan, [Esc] tutup):",
                 ),
                 Line::from(""),
                 Line::from(format!(
-                    "{} New Username: {}{}",
+                    "{} Nama Akun Baru: {}{}",
                     if *focus == UserPickerFocus::NewUsername {
                         ">"
                     } else {
@@ -1134,7 +1183,7 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
                     }
                 )),
                 Line::from(format!(
-                    "{} Temp Password (RAM only): {}{}",
+                    "{} Sandi Sementara (hanya di RAM): {}{}",
                     if *focus == UserPickerFocus::TempPassword {
                         ">"
                     } else {
@@ -1148,17 +1197,17 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
                     }
                 )),
                 Line::from(format!(
-                    "{} Clear PasswordNeverExpires ([Space]): {}",
+                    "{} Hapus PasswordNeverExpires ([Spasi]): {}",
                     if *focus == UserPickerFocus::ClearDontExpire {
                         ">"
                     } else {
                         " "
                     },
-                    clear_dont_expire
+                    if *clear_dont_expire { "Ya" } else { "Tidak" }
                 )),
                 Line::from(""),
                 Line::from(format!(
-                    "{} Existing Local Users:",
+                    "{} Daftar Akun Lokal yang Ada:",
                     if *focus == UserPickerFocus::ExistingList {
                         ">"
                     } else {
@@ -1169,14 +1218,20 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
             for (idx, u) in users.iter().enumerate() {
                 let mark = if idx == *cursor { "*" } else { " " };
                 lines.push(Line::from(format!(
-                    "  {mark} {} (disabled={}, never_expires={})",
-                    u.name, u.disabled, u.dont_expire_password
+                    "  {mark} {} (nonaktif={}, sandi_tanpa_kadaluarsa={})",
+                    u.name,
+                    if u.disabled { "ya" } else { "tidak" },
+                    if u.dont_expire_password {
+                        "ya"
+                    } else {
+                        "tidak"
+                    }
                 )));
             }
             let p = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Local Account & Temp Password"),
+                    .title("Akun Lokal & Sandi Sementara"),
             );
             frame.render_widget(p, area);
         }
@@ -1200,7 +1255,7 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title("Rollback Backup ([Enter] restore, [Esc] cancel)"),
+                        .title("Pulihkan Backup ([Enter] pulihkan, [Esc] batal)"),
                 )
                 .highlight_style(Style::default().bg(Color::Blue).fg(Color::White));
             frame.render_stateful_widget(list, area, &mut st);
@@ -1219,11 +1274,133 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title(format!("{title} ([j/k] scroll, [Esc] close)")),
+                        .title(format!("{title} ([j/k/PgUp/PgDn] gulir, [Esc] tutup)")),
                 );
             frame.render_widget(p, area);
         }
     }
+}
+
+fn documentation_lines() -> Vec<String> {
+    [
+        "=== PANDUAN SINGKAT & NAVIGASI ===",
+        "Alur aman: [r] Periksa -> [p] Simulasi -> [a] Terapkan -> [b] Pulihkan.",
+        "",
+        "Tombol Navigasi Utama:",
+        "  Up/Down atau j/k : Pindah pilihan modul",
+        "  Spasi            : Aktif/nonaktifkan modul terpilih",
+        "  e atau Enter     : Ubah parameter konfigurasi modul",
+        "  u                : Pilih/buat akun lokal target & sandi sementara",
+        "  p                : Simulasi (Dry-Run) tanpa mengubah Windows",
+        "  a                : Terapkan modul aktif (otomatis buat backup JSON)",
+        "  s                : Simpan konfigurasi ke it-tools.toml",
+        "  r                : Segarkan pemeriksaan status kepatuhan OS",
+        "  b                : Pulihkan kondisi dari file backup JSON (Rollback)",
+        "  v                : Cek pembaruan versi di GitHub Releases",
+        "  d                : Buka dokumentasi & glosarium istilah ini",
+        "  q atau Esc       : Keluar dari aplikasi",
+        "",
+        "=== ARTI STATUS & LENCANA MODUL ===",
+        "  SESUAI   (Compliant)  : Pengaturan Windows sudah cocok dengan target profil.",
+        "  BERUBAH  (Drifted)    : Kondisi Windows saat ini berbeda dari target profil.",
+        "  ADMIN    (NeedsAdmin) : Butuh hak Administrator (UAC) untuk cek/terapkan.",
+        "  KENDALA  (Unsupported): Fitur tidak tersedia/terkunci oleh OS atau VM.",
+        "  NONAKTIF              : Modul dimatikan di konfigurasi (tidak diterapkan).",
+        "  [BELUM DISIMPAN *]    : Ada ubahan di TUI yang belum disimpan dengan [s].",
+        "",
+        "=== GLOSARIUM ISTILAH TEKNIS ===",
+        "  Hardening",
+        "    Proses memperketat pengaturan sistem operasi untuk mengurangi celah",
+        "    keamanan, telemetri berlebih, dan kebijakan bawaan yang berisiko.",
+        "",
+        "  HKCU (HKEY_CURRENT_USER)",
+        "    Cabang Windows Registry khusus akun pengguna aktif saat ini.",
+        "    Dapat dibaca & diubah tanpa hak Administrator.",
+        "",
+        "  HKLM (HKEY_LOCAL_MACHINE)",
+        "    Cabang Windows Registry global untuk seluruh perangkat dan pengguna.",
+        "    Wajib hak Administrator (Elevated / UAC) untuk menerapkannya.",
+        "",
+        "  UAC (User Account Control)",
+        "    Mekanisme izin Windows untuk menjalankan ulang aplikasi sebagai",
+        "    Administrator saat modul HKLM/kebijakan sistem akan diterapkan.",
+        "",
+        "  Simulasi / Dry-Run ([p])",
+        "    Menampilkan daftar perubahan yang akan dilakukan tanpa menyentuh",
+        "    Registry/OS maupun membuat file backup.",
+        "",
+        "  Backup Snapshot & Rollback ([b])",
+        "    Sebelum mutasi live, nilai awal disimpan ke file JSON bernama",
+        "    it-tools.backup.<waktu>.json di folder yang sama dengan exe.",
+        "    Menu [b] membaca file itu untuk mengembalikan OS ke kondisi semula.",
+        "",
+        "  Idempoten",
+        "    Aman dijalankan berulang kali: bila pengaturan sudah sesuai target,",
+        "    tidak ada penulisan ulang maupun file backup ganda.",
+        "",
+        "  Telemetry & Diagnostic Data",
+        "    Data diagnostik penggunaan Windows yang dikirim ke Microsoft",
+        "    (AllowTelemetry = 0 membatasi ke tingkat minimal/Required).",
+        "",
+        "  Cloud Search & Search Highlights",
+        "    Integrasi pencarian Bing, akun Microsoft (MSA), Work/School (AAD),",
+        "    serta gambar/sorotan harian pada kotak pencarian Windows.",
+        "",
+        "  Hibernasi (hibernate) & Modern Standby (S0)",
+        "    Hibernasi menyimpan isi RAM ke hiberfil.sys di disk; menonaktifkannya",
+        "    menghemat ruang disk. Pada laptop Modern Standby (S0), sebagian opsi",
+        "    powercfg seperti tombol daya/tutup layar bisa dikunci oleh firmware.",
+        "",
+        "  PUA (Potentially Unwanted Application)",
+        "    Aplikasi tidak diinginkan (adware/bundler) yang dapat diblokir",
+        "    otomatis oleh fitur SmartScreen Microsoft Edge.",
+        "",
+        "  System Restore & VSS (Volume Shadow Copy Service)",
+        "    Titik pemulihan Windows untuk memulihkan berkas sistem, dikelola",
+        "    melalui vssadmin (misalnya batas ruang shadow storage 5GB).",
+        "",
+        "  Secedit & Password Policy",
+        "    Utilitas keamanan lokal Windows (secedit) untuk panjang sandi",
+        "    minimal, kompleksitas, riwayat sandi, masa berlaku, dan lockout.",
+        "",
+        "  PasswordNeverExpires & Sandi Sementara ([u])",
+        "    Flag akun lokal agar sandi tidak pernah kadaluarsa. Sandi sementara",
+        "    pada menu [u] hanya disimpan di RAM dan tidak ditulis ke disk/log.",
+        "",
+        "  Tamper Protection",
+        "    Proteksi anti-ubah Microsoft Defender; saat aktif di Windows Security,",
+        "    sebagian kunci Registry Defender dilindungi OS dari perubahan script.",
+        "",
+        "  ICMP Echo / Router (Firewall)",
+        "    Aturan Windows Defender Firewall untuk lalu lintas ping (Echo) dan",
+        "    penemuan router (Router) pada jaringan IPv4/IPv6.",
+        "",
+        "  StartupApproved",
+        "    Kunci Registry Windows yang menonaktifkan/mengaktifkan aplikasi",
+        "    startup secara bersih tanpa menghapus entri Run/Startup asli.",
+        "",
+        "  Kanal Rilis (Stable vs Beta)",
+        "    Stable mengikuti rilis produksi final; Beta mengikuti prarilis UAT",
+        "    untuk uji coba fitur sebelum dipromosikan ke Stable.",
+        "",
+        "=== DAFTAR 13 MODUL PENGAMANAN ===",
+        "  [HKCU] visual_effects    : Animasi jendela & transparansi tampilan",
+        "  [HKLM] diagnostics       : Pembatasan telemetri & frekuensi umpan balik",
+        "  [HKLM] search            : Nonaktif Bing/MSA/AAD cloud search & highlights",
+        "  [HKCU] typing            : Nonaktif koreksi otomatis, prediksi & insights",
+        "  [HKCU] taskbar           : Perataan taskbar, widget, auto-hide & lencana",
+        "  [HKLM] power             : Skema daya High Performance, timeout & hibernasi",
+        "  [HKCU] screensaver       : Pengunci layar otomatis & wajib login ulang",
+        "  [HKCU] accessibility     : Perilaku klasik tombol PrintScreen",
+        "  [HKLM] edge              : Nonaktif preload Edge & aktifkan blokir PUA",
+        "  [HKLM] system_restore    : Aktifkan titik pemulihan C: & batas ukuran VSS",
+        "  [HKLM] password_policy   : Panjang, kompleksitas, masa berlaku & lockout",
+        "  [HKLM] defender_firewall : Defender, profil Firewall & aturan ICMP",
+        "  [HKLM] startup_apps      : Nonaktifkan startup non-allowlist (StartupApproved)",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 fn centered_rect(pct_x: u16, pct_y: u16, r: Rect) -> Rect {
@@ -1296,12 +1473,21 @@ pub fn toggle_rule_enabled(cfg: &mut ProfileConfig, id: &str) {
 
 fn format_field_value(kind: &FieldKind) -> String {
     match kind {
-        FieldKind::Bool(b) => b.to_string(),
+        FieldKind::Bool(true) => "Ya".into(),
+        FieldKind::Bool(false) => "Tidak".into(),
         FieldKind::Text(s) => s.clone(),
         FieldKind::U32(n) => n.to_string(),
-        FieldKind::Alignment(a) => format!("{a:?}"),
-        FieldKind::Feedback(f) => format!("{f:?}"),
-        FieldKind::PowerAct(p) => format!("{p:?}"),
+        FieldKind::Alignment(TaskbarAlignment::Left) => "Kiri (Left)".into(),
+        FieldKind::Alignment(TaskbarAlignment::Center) => "Tengah (Center)".into(),
+        FieldKind::Feedback(FeedbackFrequency::Never) => "Tidak Pernah (Never)".into(),
+        FieldKind::Feedback(FeedbackFrequency::OnceADay) => "Sekali Sehari (OnceADay)".into(),
+        FieldKind::Feedback(FeedbackFrequency::OnceAWeek) => "Sekali Seminggu (OnceAWeek)".into(),
+        FieldKind::Feedback(FeedbackFrequency::Always) => "Selalu (Always)".into(),
+        FieldKind::Feedback(FeedbackFrequency::Auto) => "Otomatis (Auto)".into(),
+        FieldKind::PowerAct(PowerAction::Nothing) => "Tidak Ada (Nothing)".into(),
+        FieldKind::PowerAct(PowerAction::Sleep) => "Tidur (Sleep)".into(),
+        FieldKind::PowerAct(PowerAction::Hibernate) => "Hibernasi (Hibernate)".into(),
+        FieldKind::PowerAct(PowerAction::Shutdown) => "Matikan (Shutdown)".into(),
     }
 }
 
@@ -1323,265 +1509,265 @@ fn fields_for_rule(cfg: &ProfileConfig, id: &str) -> Vec<EditableField> {
         "visual_effects" => vec![
             EditableField {
                 key: "enabled",
-                label: "Enabled",
+                label: "Aktif",
                 kind: FieldKind::Bool(r.visual_effects.enabled),
             },
             EditableField {
                 key: "animations",
-                label: "Animations",
+                label: "Animasi",
                 kind: FieldKind::Bool(r.visual_effects.animations),
             },
             EditableField {
                 key: "transparency",
-                label: "Transparency",
+                label: "Transparansi",
                 kind: FieldKind::Bool(r.visual_effects.transparency),
             },
         ],
         "diagnostics" => vec![
             EditableField {
                 key: "enabled",
-                label: "Enabled",
+                label: "Aktif",
                 kind: FieldKind::Bool(r.diagnostics.enabled),
             },
             EditableField {
                 key: "optional_data",
-                label: "Optional Data",
+                label: "Data Opsional",
                 kind: FieldKind::Bool(r.diagnostics.optional_data),
             },
             EditableField {
                 key: "feedback",
-                label: "Feedback Frequency",
+                label: "Frekuensi Umpan Balik",
                 kind: FieldKind::Feedback(r.diagnostics.feedback_frequency),
             },
         ],
         "search" => vec![
             EditableField {
                 key: "enabled",
-                label: "Enabled",
+                label: "Aktif",
                 kind: FieldKind::Bool(r.search.enabled),
             },
             EditableField {
                 key: "msa",
-                label: "MSA Cloud Search",
+                label: "Pencarian Cloud MSA",
                 kind: FieldKind::Bool(r.search.msa_cloud_search),
             },
             EditableField {
                 key: "aad",
-                label: "Work/School Search",
+                label: "Pencarian Kantor/Sekolah",
                 kind: FieldKind::Bool(r.search.work_school_search),
             },
             EditableField {
                 key: "highlights",
-                label: "Search Highlights",
+                label: "Sorotan Pencarian",
                 kind: FieldKind::Bool(r.search.search_highlights),
             },
         ],
         "typing" => vec![
             EditableField {
                 key: "enabled",
-                label: "Enabled",
+                label: "Aktif",
                 kind: FieldKind::Bool(r.typing.enabled),
             },
             EditableField {
                 key: "autocorrect",
-                label: "Autocorrect",
+                label: "Koreksi Otomatis",
                 kind: FieldKind::Bool(r.typing.autocorrect),
             },
             EditableField {
                 key: "highlight",
-                label: "Highlight Misspelled",
+                label: "Sorot Salah Ketik",
                 kind: FieldKind::Bool(r.typing.highlight_misspelled),
             },
             EditableField {
                 key: "prediction",
-                label: "Text Prediction",
+                label: "Prediksi Teks",
                 kind: FieldKind::Bool(r.typing.text_prediction),
             },
             EditableField {
                 key: "insights",
-                label: "Typing Insights",
+                label: "Wawasan Mengetik",
                 kind: FieldKind::Bool(r.typing.typing_insights),
             },
             EditableField {
                 key: "voice",
-                label: "Voice Typing Key",
+                label: "Tombol Ketik Suara",
                 kind: FieldKind::Bool(r.typing.voice_typing_key),
             },
             EditableField {
                 key: "multi",
-                label: "Multilingual",
+                label: "Multibahasa",
                 kind: FieldKind::Bool(r.typing.multilingual),
             },
             EditableField {
                 key: "shift",
-                label: "Auto Shift",
+                label: "Kapital Otomatis",
                 kind: FieldKind::Bool(r.typing.auto_shift),
             },
             EditableField {
                 key: "space",
-                label: "Double-tap Space",
+                label: "Spasi Ganda Titik",
                 kind: FieldKind::Bool(r.typing.double_tap_space),
             },
         ],
         "taskbar" => vec![
             EditableField {
                 key: "enabled",
-                label: "Enabled",
+                label: "Aktif",
                 kind: FieldKind::Bool(r.taskbar.enabled),
             },
             EditableField {
                 key: "widgets",
-                label: "Widgets",
+                label: "Widget",
                 kind: FieldKind::Bool(r.taskbar.widgets),
             },
             EditableField {
                 key: "alignment",
-                label: "Alignment",
+                label: "Perataan Taskbar",
                 kind: FieldKind::Alignment(r.taskbar.alignment),
             },
             EditableField {
                 key: "auto_hide",
-                label: "Auto-hide",
+                label: "Sembunyikan Otomatis",
                 kind: FieldKind::Bool(r.taskbar.auto_hide),
             },
             EditableField {
                 key: "badges",
-                label: "Show Badges",
+                label: "Tampilkan Lencana",
                 kind: FieldKind::Bool(r.taskbar.show_badges),
             },
             EditableField {
                 key: "flashing",
-                label: "Show Flashing",
+                label: "Kedipan Ikon",
                 kind: FieldKind::Bool(r.taskbar.show_flashing),
             },
         ],
         "power" => vec![
             EditableField {
                 key: "enabled",
-                label: "Enabled",
+                label: "Aktif",
                 kind: FieldKind::Bool(r.power.enabled),
             },
             EditableField {
                 key: "hibernate",
-                label: "Hibernate",
+                label: "Hibernasi",
                 kind: FieldKind::Bool(r.power.hibernate),
             },
             EditableField {
                 key: "scheme",
-                label: "Scheme",
+                label: "Skema Daya",
                 kind: FieldKind::Text(r.power.scheme.clone()),
             },
             EditableField {
                 key: "min_cpu_ac",
-                label: "Min CPU AC %",
+                label: "CPU Min AC (%)",
                 kind: FieldKind::U32(r.power.min_cpu_ac_pct.into()),
             },
             EditableField {
                 key: "min_cpu_dc",
-                label: "Min CPU DC %",
+                label: "CPU Min DC (%)",
                 kind: FieldKind::U32(r.power.min_cpu_dc_pct.into()),
             },
             EditableField {
                 key: "pbtn_ac",
-                label: "Power Button AC",
+                label: "Tombol Daya AC",
                 kind: FieldKind::PowerAct(r.power.power_button_ac),
             },
             EditableField {
                 key: "lid_ac",
-                label: "Lid Close AC",
+                label: "Tutup Layar AC",
                 kind: FieldKind::PowerAct(r.power.lid_close_ac),
             },
             EditableField {
                 key: "disp_ac",
-                label: "Display AC (min)",
+                label: "Layar Mati AC (mnt)",
                 kind: FieldKind::U32(r.power.display_timeout_ac_min),
             },
             EditableField {
                 key: "disp_dc",
-                label: "Display DC (min)",
+                label: "Layar Mati DC (mnt)",
                 kind: FieldKind::U32(r.power.display_timeout_dc_min),
             },
             EditableField {
                 key: "sleep_ac",
-                label: "Sleep AC (min)",
+                label: "Tidur AC (mnt)",
                 kind: FieldKind::U32(r.power.sleep_timeout_ac_min),
             },
             EditableField {
                 key: "sleep_dc",
-                label: "Sleep DC (min)",
+                label: "Tidur DC (mnt)",
                 kind: FieldKind::U32(r.power.sleep_timeout_dc_min),
             },
         ],
         "screensaver" => vec![
             EditableField {
                 key: "enabled",
-                label: "Enabled",
+                label: "Aktif",
                 kind: FieldKind::Bool(r.screensaver.enabled),
             },
             EditableField {
                 key: "active",
-                label: "Active",
+                label: "Screen Saver Aktif",
                 kind: FieldKind::Bool(r.screensaver.active),
             },
             EditableField {
                 key: "scr_exe",
-                label: "SCR Executable",
+                label: "File SCR",
                 kind: FieldKind::Text(r.screensaver.scr_exe.clone()),
             },
             EditableField {
                 key: "timeout",
-                label: "Timeout (sec)",
+                label: "Batas Waktu (dtk)",
                 kind: FieldKind::U32(r.screensaver.timeout_sec),
             },
             EditableField {
                 key: "logon",
-                label: "Require Logon",
+                label: "Wajib Login Ulang",
                 kind: FieldKind::Bool(r.screensaver.require_logon),
             },
         ],
         "accessibility" => vec![
             EditableField {
                 key: "enabled",
-                label: "Enabled",
+                label: "Aktif",
                 kind: FieldKind::Bool(r.accessibility.enabled),
             },
             EditableField {
                 key: "snipping",
-                label: "PrintScreen Snipping",
+                label: "PrintScreen ke Snipping",
                 kind: FieldKind::Bool(r.accessibility.printscreen_snipping),
             },
         ],
         "edge" => vec![
             EditableField {
                 key: "enabled",
-                label: "Enabled",
+                label: "Aktif",
                 kind: FieldKind::Bool(r.edge.enabled),
             },
             EditableField {
                 key: "ntp",
-                label: "Preload New Tab",
+                label: "Pra-muat Tab Baru",
                 kind: FieldKind::Bool(r.edge.preload_new_tab),
             },
             EditableField {
                 key: "startup",
-                label: "Prelaunch Startup",
+                label: "Pra-luncur Startup",
                 kind: FieldKind::Bool(r.edge.prelaunch_startup),
             },
             EditableField {
                 key: "tab",
-                label: "Tab Preloading",
+                label: "Pra-muat Tab",
                 kind: FieldKind::Bool(r.edge.tab_preloading),
             },
             EditableField {
                 key: "pua",
-                label: "Block PUA",
+                label: "Blokir PUA",
                 kind: FieldKind::Bool(r.edge.block_pua),
             },
         ],
         "system_restore" => vec![
             EditableField {
                 key: "enabled",
-                label: "Enabled",
+                label: "Aktif",
                 kind: FieldKind::Bool(r.system_restore.enabled),
             },
             EditableField {
@@ -1591,103 +1777,103 @@ fn fields_for_rule(cfg: &ProfileConfig, id: &str) -> Vec<EditableField> {
             },
             EditableField {
                 key: "enable",
-                label: "Enable Protection",
+                label: "Aktifkan Proteksi",
                 kind: FieldKind::Bool(r.system_restore.enable),
             },
             EditableField {
                 key: "max_size",
-                label: "Max Size",
+                label: "Ukuran Maksimal",
                 kind: FieldKind::Text(r.system_restore.max_size.clone()),
             },
         ],
         "password_policy" => vec![
             EditableField {
                 key: "enabled",
-                label: "Enabled",
+                label: "Aktif",
                 kind: FieldKind::Bool(r.password_policy.enabled),
             },
             EditableField {
                 key: "history",
-                label: "Password History",
+                label: "Riwayat Sandi",
                 kind: FieldKind::U32(r.password_policy.password_history.into()),
             },
             EditableField {
                 key: "max_age",
-                label: "Max Age (days)",
+                label: "Masa Berlaku (hari)",
                 kind: FieldKind::U32(r.password_policy.max_password_age_days.into()),
             },
             EditableField {
                 key: "min_len",
-                label: "Min Length",
+                label: "Panjang Minimal",
                 kind: FieldKind::U32(r.password_policy.min_password_length.into()),
             },
             EditableField {
                 key: "complex",
-                label: "Complexity",
+                label: "Kompleksitas Sandi",
                 kind: FieldKind::Bool(r.password_policy.complexity_enabled),
             },
             EditableField {
                 key: "lock_thr",
-                label: "Lockout Threshold",
+                label: "Ambang Kunci Akun",
                 kind: FieldKind::U32(r.password_policy.lockout_threshold.into()),
             },
             EditableField {
                 key: "lock_dur",
-                label: "Lockout Duration",
+                label: "Durasi Kunci (mnt)",
                 kind: FieldKind::U32(r.password_policy.lockout_duration_min),
             },
             EditableField {
                 key: "lock_rst",
-                label: "Lockout Reset",
+                label: "Reset Kunci (mnt)",
                 kind: FieldKind::U32(r.password_policy.lockout_reset_min),
             },
             EditableField {
                 key: "adm_lock",
-                label: "Allow Admin Lockout",
+                label: "Izinkan Kunci Admin",
                 kind: FieldKind::Bool(r.password_policy.allow_admin_lockout),
             },
         ],
         "defender_firewall" => vec![
             EditableField {
                 key: "enabled",
-                label: "Enabled",
+                label: "Aktif",
                 kind: FieldKind::Bool(r.defender_firewall.enabled),
             },
             EditableField {
                 key: "headless",
-                label: "Headless Defender UI",
+                label: "UI Defender Tanpa Tampilan",
                 kind: FieldKind::Bool(r.defender_firewall.defender_headless_ui),
             },
             EditableField {
                 key: "def_on",
-                label: "Defender Enabled",
+                label: "Defender Aktif",
                 kind: FieldKind::Bool(r.defender_firewall.defender_enabled),
             },
             EditableField {
                 key: "profiles",
-                label: "Profiles (csv)",
+                label: "Profil Firewall (csv)",
                 kind: FieldKind::Text(r.defender_firewall.firewall_profiles.join(",")),
             },
             EditableField {
                 key: "icmp_echo",
-                label: "Allow ICMP Echo",
+                label: "Izinkan ICMP Echo",
                 kind: FieldKind::Bool(r.defender_firewall.allow_icmp_echo),
             },
             EditableField {
                 key: "icmp_rtr",
-                label: "Allow ICMP Router",
+                label: "Izinkan ICMP Router",
                 kind: FieldKind::Bool(r.defender_firewall.allow_icmp_router),
             },
         ],
         "startup_apps" => vec![
             EditableField {
                 key: "enabled",
-                label: "Enabled",
+                label: "Aktif",
                 kind: FieldKind::Bool(r.startup_apps.enabled),
             },
             EditableField {
                 key: "allowlist",
-                label: "Allowlist (csv)",
+                label: "Daftar Pengecualian (csv)",
                 kind: FieldKind::Text(r.startup_apps.allowlist.join(",")),
             },
         ],
@@ -2091,8 +2277,8 @@ mod tests {
         app.handle_key(KeyCode::Char('v'), &ops, &[]).unwrap();
         match &app.modal {
             Modal::ReportView { title, lines, .. } => {
-                assert_eq!(title, "Version & Updates");
-                assert!(lines.iter().any(|l| l.contains("UPDATE AVAILABLE")));
+                assert_eq!(title, "Versi & Pembaruan");
+                assert!(lines.iter().any(|l| l.contains("PEMBARUAN TERSEDIA")));
                 assert!(lines.iter().any(|l| l.contains("99.0.0")));
             }
             other => panic!("expected ReportView modal, got {other:?}"),
@@ -2140,6 +2326,70 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(!tiny_all.contains("$$$$$$/"));
-        assert!(tiny_all.contains("Hardening Modules"));
+        assert!(tiny_all.contains("Modul Pengamanan"));
+        assert!(tiny_all.contains("[d] Dok"));
+    }
+
+    #[test]
+    fn tui_d_key_opens_indonesian_documentation_and_glossary_modal() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let ops = FakeSystemOps::default();
+        let dir = std::env::temp_dir().join(format!("it-tools-tui-doc-{}", std::process::id()));
+        let mut app = TuiApp::new(
+            &ops,
+            &[],
+            ProfileConfig::embedded_default(),
+            dir.join("it-tools.toml"),
+            dir,
+            vec![],
+        )
+        .unwrap();
+        assert!(app.status_banner.contains("[d] Dok"));
+
+        app.handle_key(KeyCode::Char('d'), &ops, &[]).unwrap();
+        match &app.modal {
+            Modal::ReportView {
+                title,
+                lines,
+                scroll,
+            } => {
+                assert_eq!(title, "Dokumentasi & Glosarium Istilah");
+                assert_eq!(*scroll, 0);
+                let joined = lines.join("\n");
+                for term in [
+                    "SESUAI",
+                    "BERUBAH",
+                    "HKCU",
+                    "HKLM",
+                    "UAC",
+                    "Dry-Run",
+                    "Rollback",
+                    "Tamper Protection",
+                    "StartupApproved",
+                ] {
+                    assert!(joined.contains(term), "missing glossary term `{term}`");
+                }
+            }
+            other => panic!("expected ReportView modal, got {other:?}"),
+        }
+
+        app.handle_key(KeyCode::PageDown, &ops, &[]).unwrap();
+        match &app.modal {
+            Modal::ReportView { scroll, .. } => assert_eq!(*scroll, 10),
+            other => panic!("expected ReportView modal after PageDown, got {other:?}"),
+        }
+        app.handle_key(KeyCode::PageUp, &ops, &[]).unwrap();
+        match &app.modal {
+            Modal::ReportView { scroll, .. } => assert_eq!(*scroll, 0),
+            other => panic!("expected ReportView modal after PageUp, got {other:?}"),
+        }
+
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        term.draw(|f| draw_ui(f, &app, &[])).unwrap();
+
+        app.handle_key(KeyCode::Esc, &ops, &[]).unwrap();
+        assert!(matches!(app.modal, Modal::None));
     }
 }
