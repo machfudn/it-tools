@@ -15,7 +15,8 @@ use crate::engine::report::{CheckReport, CheckStatus, RuleCheck, RuleOutcome, Ru
 use crate::engine::{ApplyOptions, Rule, UserTargetOptions, apply_rules, check_rules};
 use crate::platform::{LocalUserInfo, SystemOps};
 use crate::update::{
-    UpdateChannel, check_for_update, current_channel, current_display_version, default_github_repo,
+    UpdateChannel, UpdateCheckResult, check_for_update, current_channel, current_display_version,
+    default_github_repo, perform_update,
 };
 
 const CONTROLS_BAR: &str = "[Spasi] Aktif [e] Ubah [u] Akun [p] Simulasi [a] Terapkan [s] Simpan [b] Pulih [v] Update [d] Dok [q] Keluar";
@@ -61,6 +62,7 @@ pub enum Modal {
         title: String,
         lines: Vec<String>,
         scroll: u16,
+        update: Option<Box<UpdateCheckResult>>,
     },
 }
 
@@ -645,6 +647,7 @@ impl TuiApp {
                             title: format!("Pemulihan: {}", path.display()),
                             lines: actions,
                             scroll: 0,
+                            update: None,
                         };
                         let name = path
                             .file_name()
@@ -667,14 +670,29 @@ impl TuiApp {
                 title,
                 lines,
                 mut scroll,
+                update,
             } => match code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => Ok(TuiEffect::Continue),
+                KeyCode::Char('u') | KeyCode::Char('U') => {
+                    if let Some(check) = update {
+                        self.install_update_from_modal(ops, &check);
+                    } else {
+                        self.modal = Modal::ReportView {
+                            title,
+                            lines,
+                            scroll,
+                            update: None,
+                        };
+                    }
+                    Ok(TuiEffect::Continue)
+                }
                 KeyCode::Up | KeyCode::Char('k') => {
                     scroll = scroll.saturating_sub(1);
                     self.modal = Modal::ReportView {
                         title,
                         lines,
                         scroll,
+                        update,
                     };
                     Ok(TuiEffect::Continue)
                 }
@@ -686,6 +704,7 @@ impl TuiApp {
                         title,
                         lines,
                         scroll,
+                        update,
                     };
                     Ok(TuiEffect::Continue)
                 }
@@ -695,6 +714,7 @@ impl TuiApp {
                         title,
                         lines,
                         scroll,
+                        update,
                     };
                     Ok(TuiEffect::Continue)
                 }
@@ -705,6 +725,7 @@ impl TuiApp {
                         title,
                         lines,
                         scroll,
+                        update,
                     };
                     Ok(TuiEffect::Continue)
                 }
@@ -713,6 +734,7 @@ impl TuiApp {
                         title,
                         lines,
                         scroll,
+                        update,
                     };
                     Ok(TuiEffect::Continue)
                 }
@@ -867,6 +889,7 @@ impl TuiApp {
                     "  it-tools update --check --repo owner/repo".into(),
                 ],
                 scroll: 0,
+                update: None,
             };
             self.set_notification(
                 NotificationLevel::Warning,
@@ -877,19 +900,25 @@ impl TuiApp {
 
         match check_for_update(ops, &repo, ch) {
             Ok(res) => {
+                let can_install = res.update_available && res.asset_url.is_some();
                 let mut lines = vec![
                     format!("Repositori      : {repo}"),
                     format!("Versi Terpasang : {}", res.current_version),
                     format!("Terbaru ({:<6}): {}", res.channel, res.latest_version),
                     format!(
                         "Status          : {}",
-                        if res.update_available {
-                            "PEMBARUAN TERSEDIA (jalankan `it-tools update` di terminal)"
+                        if can_install {
+                            "PEMBARUAN TERSEDIA — tekan [u] untuk unduh & pasang sekarang"
+                        } else if res.update_available {
+                            "PEMBARUAN TERSEDIA (aset .exe belum tersedia pada rilis ini)"
                         } else {
                             "SUDAH MUTAKHIR"
                         }
                     ),
                 ];
+                if let Some(asset) = &res.asset_name {
+                    lines.push(format!("Aset            : {asset}"));
+                }
                 if !res.html_url.is_empty() {
                     lines.push(format!("URL             : {}", res.html_url));
                 }
@@ -898,11 +927,19 @@ impl TuiApp {
                     lines.push("--- Catatan Rilis ---".into());
                     lines.extend(res.release_notes.lines().map(str::to_string));
                 }
-                let (lvl, msg) = if res.update_available {
+                let (lvl, msg) = if can_install {
                     (
                         NotificationLevel::Info,
                         format!(
-                            "Pembaruan tersedia: v{} ({}).",
+                            "Pembaruan tersedia: v{} ({}) — tekan [u] di modal untuk pasang.",
+                            res.latest_version, res.channel
+                        ),
+                    )
+                } else if res.update_available {
+                    (
+                        NotificationLevel::Warning,
+                        format!(
+                            "Pembaruan v{} ({}) ditemukan, tetapi aset .exe belum tersedia.",
                             res.latest_version, res.channel
                         ),
                     )
@@ -912,10 +949,12 @@ impl TuiApp {
                         format!("Aplikasi sudah versi terbaru (v{}).", res.current_version),
                     )
                 };
+                let pending = can_install.then(|| Box::new(res));
                 self.modal = Modal::ReportView {
                     title: "Versi & Pembaruan".into(),
                     lines,
                     scroll: 0,
+                    update: pending,
                 };
                 self.set_notification(lvl, msg);
             }
@@ -932,6 +971,56 @@ impl TuiApp {
                         format!("Galat           : {e:#}"),
                     ],
                     scroll: 0,
+                    update: None,
+                };
+            }
+        }
+    }
+
+    fn install_update_from_modal(&mut self, ops: &dyn SystemOps, check: &UpdateCheckResult) {
+        match perform_update(ops, check) {
+            Ok(applied) => {
+                let sha_status = if applied.sha256_verified {
+                    "terverifikasi SHA256SUMS"
+                } else {
+                    "dihitung tanpa SHA256SUMS"
+                };
+                self.set_notification(
+                    NotificationLevel::Success,
+                    format!(
+                        "Berhasil diperbarui ke v{}! Tutup lalu buka ulang it-tools.exe.",
+                        applied.new_version
+                    ),
+                );
+                self.modal = Modal::ReportView {
+                    title: "Pembaruan Berhasil Dipasang".into(),
+                    lines: vec![
+                        format!("Versi Lama    : {}", applied.previous_version),
+                        format!("Versi Baru    : {}", applied.new_version),
+                        format!("Lokasi Binary : {}", applied.exe_path),
+                        format!("Backup Lama   : {}", applied.backup_path),
+                        format!("SHA-256       : {} ({sha_status})", applied.sha256),
+                        String::new(),
+                        "Langkah selanjutnya:".into(),
+                        "  Tutup aplikasi ([Esc]/[q]) lalu buka ulang it-tools.exe agar versi baru berjalan.".into(),
+                    ],
+                    scroll: 0,
+                    update: None,
+                };
+            }
+            Err(e) => {
+                self.set_notification(
+                    NotificationLevel::Error,
+                    format!("Gagal memasang pembaruan: {e:#}"),
+                );
+                self.modal = Modal::ReportView {
+                    title: "Pembaruan Gagal".into(),
+                    lines: vec![
+                        format!("Versi Target : {}", check.latest_version),
+                        format!("Galat        : {e:#}"),
+                    ],
+                    scroll: 0,
+                    update: None,
                 };
             }
         }
@@ -942,6 +1031,7 @@ impl TuiApp {
             title: "Dokumentasi & Glosarium Istilah".into(),
             lines: documentation_lines(),
             scroll: 0,
+            update: None,
         };
     }
 
@@ -992,6 +1082,7 @@ impl TuiApp {
             title: title.to_string(),
             lines,
             scroll: 0,
+            update: None,
         };
     }
 
@@ -1455,17 +1546,23 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
             title,
             lines,
             scroll,
+            update,
         } => {
             let area = centered_rect(82, 78, frame.area());
             frame.render_widget(Clear, area);
             let text: Vec<Line> = lines.iter().map(|s| Line::from(s.as_str())).collect();
+            let footer_hint = if update.is_some() {
+                "[u] Unduh & Pasang, [j/k/PgUp/PgDn] gulir, [Esc] tutup"
+            } else {
+                "[j/k/PgUp/PgDn] gulir, [Esc] tutup"
+            };
             let p = Paragraph::new(text)
                 .scroll((*scroll, 0))
                 .wrap(Wrap { trim: false })
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title(format!("{title} ([j/k/PgUp/PgDn] gulir, [Esc] tutup)")),
+                        .title(format!("{title} ({footer_hint})")),
                 );
             frame.render_widget(p, area);
         }
@@ -1487,7 +1584,7 @@ fn documentation_lines() -> Vec<String> {
         "  s                : Simpan konfigurasi ke it-tools.toml",
         "  r                : Segarkan pemeriksaan status kepatuhan OS",
         "  b                : Pulihkan kondisi dari file backup JSON (Rollback)",
-        "  v                : Cek pembaruan versi di GitHub Releases",
+        "  v                : Cek & pasang pembaruan versi (Stable/Beta) di GitHub",
         "  d                : Buka dokumentasi & glosarium istilah ini",
         "  q atau Esc       : Keluar dari aplikasi",
         "",
@@ -2546,6 +2643,7 @@ mod tests {
                 title,
                 lines,
                 scroll,
+                ..
             } => {
                 assert_eq!(title, "Dokumentasi & Glosarium Istilah");
                 assert_eq!(*scroll, 0);
@@ -2652,5 +2750,175 @@ mod tests {
         assert!(rows2[ctrl_y..].join("\n").contains("[Spasi] Aktif"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tui_v_then_u_downloads_verifies_sha256_and_installs_update_on_beta_channel() {
+        use crate::update::{backup_exe_path, sha256_hex};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let ops = FakeSystemOps::default();
+        let exe_path = ops.current_exe_path().unwrap();
+        let old_exe = b"MZ_OLD_BETA_EXE_PAYLOAD_1234567890_PADDING_PADDING_PADDING_PADDING";
+        ops.write_file(&exe_path, old_exe).unwrap();
+
+        let mut new_exe = b"MZ_NEW_BETA_EXE_PORTABLE_V99".to_vec();
+        new_exe.resize(128, 0x90);
+        let new_sha = sha256_hex(&new_exe);
+        let sums = format!("{new_sha}  it-tools.exe\n");
+        let releases_json = r#"[{
+            "tag_name": "v99.1.0-beta.5",
+            "prerelease": true,
+            "published_at": "2026-11-12T00:00:00Z",
+            "html_url": "https://github.com/acme/it-tools/releases/tag/v99.1.0-beta.5",
+            "body": "Beta 5 UAT build",
+            "assets": [
+                {"name": "it-tools.exe", "browser_download_url": "https://dl.example/beta5/it-tools.exe"},
+                {"name": "SHA256SUMS.txt", "browser_download_url": "https://dl.example/beta5/SHA256SUMS.txt"}
+            ]
+        }]"#;
+        {
+            let mut st = ops.state.borrow_mut();
+            st.http_responses.insert(
+                "https://api.github.com/repos/acme/it-tools/releases?per_page=20".into(),
+                (200, releases_json.as_bytes().to_vec()),
+            );
+            st.http_responses.insert(
+                "https://dl.example/beta5/it-tools.exe".into(),
+                (200, new_exe.clone()),
+            );
+            st.http_responses.insert(
+                "https://dl.example/beta5/SHA256SUMS.txt".into(),
+                (200, sums.into_bytes()),
+            );
+        }
+
+        let mut cfg = ProfileConfig::embedded_default();
+        cfg.update.repo = Some("acme/it-tools".into());
+        cfg.update.allow_beta = true;
+        let dir =
+            std::env::temp_dir().join(format!("it-tools-tui-beta-upd-{}", std::process::id()));
+        let mut app = TuiApp::new(&ops, &[], cfg, dir.join("it-tools.toml"), dir, vec![]).unwrap();
+
+        app.handle_key(KeyCode::Char('v'), &ops, &[]).unwrap();
+        assert_eq!(app.notification_level, NotificationLevel::Info);
+        match &app.modal {
+            Modal::ReportView {
+                title,
+                lines,
+                update,
+                ..
+            } => {
+                assert_eq!(title, "Versi & Pembaruan");
+                assert!(update.is_some());
+                assert!(lines.iter().any(|l| l.contains("99.1.0-beta.5")));
+            }
+            other => panic!("expected ReportView modal, got {other:?}"),
+        }
+
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        term.draw(|f| draw_ui(f, &app, &[])).unwrap();
+        let buf = term.backend().buffer().clone();
+        let rendered: String = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("[u] Unduh & Pasang"));
+
+        app.handle_key(KeyCode::Char('u'), &ops, &[]).unwrap();
+        assert_eq!(app.notification_level, NotificationLevel::Success);
+        assert!(app.status_banner.contains("99.1.0-beta.5"));
+        assert_eq!(ops.read_file_opt(&exe_path).unwrap().unwrap(), new_exe);
+        assert_eq!(
+            ops.read_file_opt(&backup_exe_path(&exe_path))
+                .unwrap()
+                .unwrap(),
+            old_exe
+        );
+        match &app.modal {
+            Modal::ReportView {
+                title,
+                lines,
+                update,
+                ..
+            } => {
+                assert_eq!(title, "Pembaruan Berhasil Dipasang");
+                assert!(update.is_none());
+                assert!(lines.iter().any(|l| l.contains("terverifikasi SHA256SUMS")));
+            }
+            other => panic!("expected installed ReportView modal, got {other:?}"),
+        }
+
+        app.handle_key(KeyCode::Esc, &ops, &[]).unwrap();
+        assert!(matches!(app.modal, Modal::None));
+    }
+
+    #[test]
+    fn tui_v_then_u_aborts_on_sha256_mismatch_and_keeps_existing_exe() {
+        let ops = FakeSystemOps::default();
+        let exe_path = ops.current_exe_path().unwrap();
+        let original = b"MZ_ORIGINAL_SAFE_TUI_EXE_PADDING_PADDING_PADDING_PADDING_PADDING";
+        ops.write_file(&exe_path, original).unwrap();
+
+        let mut bad_exe = b"MZ_CORRUPTED".to_vec();
+        bad_exe.resize(128, 0xAA);
+        let wrong_sums =
+            "0000000000000000000000000000000000000000000000000000000000000000  it-tools.exe\n";
+        let release_json = r#"{
+            "tag_name": "v99.0.0",
+            "prerelease": false,
+            "published_at": "2026-11-11T00:00:00Z",
+            "html_url": "https://github.com/acme/it-tools/releases/tag/v99.0.0",
+            "body": "Release notes",
+            "assets": [
+                {"name": "it-tools.exe", "browser_download_url": "https://dl.example/bad/it-tools.exe"},
+                {"name": "SHA256SUMS.txt", "browser_download_url": "https://dl.example/bad/SHA256SUMS.txt"}
+            ]
+        }"#;
+        {
+            let mut st = ops.state.borrow_mut();
+            st.http_responses.insert(
+                "https://api.github.com/repos/acme/it-tools/releases/latest".into(),
+                (200, release_json.as_bytes().to_vec()),
+            );
+            st.http_responses.insert(
+                "https://api.github.com/repos/acme/it-tools/releases?per_page=20".into(),
+                (200, format!("[{release_json}]").into_bytes()),
+            );
+            st.http_responses
+                .insert("https://dl.example/bad/it-tools.exe".into(), (200, bad_exe));
+            st.http_responses.insert(
+                "https://dl.example/bad/SHA256SUMS.txt".into(),
+                (200, wrong_sums.as_bytes().to_vec()),
+            );
+        }
+
+        let mut cfg = ProfileConfig::embedded_default();
+        cfg.update.repo = Some("acme/it-tools".into());
+        let dir = std::env::temp_dir().join(format!("it-tools-tui-bad-upd-{}", std::process::id()));
+        let mut app = TuiApp::new(&ops, &[], cfg, dir.join("it-tools.toml"), dir, vec![]).unwrap();
+
+        app.handle_key(KeyCode::Char('v'), &ops, &[]).unwrap();
+        app.handle_key(KeyCode::Char('u'), &ops, &[]).unwrap();
+
+        assert_eq!(app.notification_level, NotificationLevel::Error);
+        assert!(app.status_banner.contains("SHA-256 verification failed"));
+        assert_eq!(ops.read_file_opt(&exe_path).unwrap().unwrap(), original);
+        match &app.modal {
+            Modal::ReportView { title, lines, .. } => {
+                assert_eq!(title, "Pembaruan Gagal");
+                assert!(
+                    lines
+                        .iter()
+                        .any(|l| l.contains("SHA-256 verification failed"))
+                );
+            }
+            other => panic!("expected failed ReportView modal, got {other:?}"),
+        }
     }
 }
