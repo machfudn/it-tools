@@ -3,7 +3,9 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
+
+use crate::{APP_BANNER, APP_BANNER_WIDTH};
 
 use crate::backup::{BackupSnapshot, rollback_snapshot};
 use crate::config::{ProfileConfig, write_default_template};
@@ -168,12 +170,43 @@ pub struct UpdateArgs {
     #[arg(long)]
     pub json: bool,
 }
+fn attach_banner_recursive(cmd: clap::Command) -> clap::Command {
+    let mut cmd = cmd.before_help(APP_BANNER);
+    for sub in cmd.get_subcommands_mut() {
+        let taken = std::mem::take(sub);
+        *sub = attach_banner_recursive(taken);
+    }
+    cmd
+}
+
 pub fn parse_args<I, T>(args: I) -> std::result::Result<Cli, clap::Error>
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    Cli::try_parse_from(args)
+    let mut matches = attach_banner_recursive(Cli::command()).try_get_matches_from(args)?;
+    Cli::from_arg_matches_mut(&mut matches)
+}
+
+pub fn write_cli_banner(out: &mut dyn Write) -> io::Result<()> {
+    writeln!(out, "{APP_BANNER}")?;
+    writeln!(
+        out,
+        "  Windows 10/11 Hardening & Provisioning | v{}",
+        current_display_version()
+    )?;
+    writeln!(out, "{}", "-".repeat(APP_BANNER_WIDTH))
+}
+
+fn write_cli_toml_banner(out: &mut dyn Write) -> io::Result<()> {
+    for line in APP_BANNER.lines() {
+        writeln!(out, "# {line}")?;
+    }
+    writeln!(
+        out,
+        "# Windows 10/11 Hardening & Provisioning | v{}",
+        current_display_version()
+    )
 }
 
 pub fn run_subcommand(
@@ -192,6 +225,7 @@ pub fn run_subcommand(
             if args.json {
                 writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
             } else {
+                write_cli_banner(out)?;
                 write!(out, "{}", format_check_table(&report))?;
             }
             Ok(EXIT_OK)
@@ -229,6 +263,10 @@ pub fn run_subcommand(
                     temp_password: temp_pw,
                 })
             };
+            if !args.json {
+                write_cli_banner(out)?;
+                out.flush()?;
+            }
 
             if !args.dry_run && !args.yes {
                 if !ops.is_console_tty() {
@@ -280,6 +318,10 @@ pub fn run_subcommand(
                 )?;
                 return Ok(EXIT_ELEVATION_REQUIRED);
             }
+            if !args.json {
+                write_cli_banner(out)?;
+                out.flush()?;
+            }
             if !args.yes {
                 if !ops.is_console_tty() {
                     writeln!(err, "Non-interactive rollback requires --yes.")?;
@@ -319,6 +361,7 @@ pub fn run_subcommand(
             } => {
                 let target = out_path.unwrap_or_else(|| exe_dir.join("it-tools.toml"));
                 write_default_template(&target, force)?;
+                write_cli_banner(out)?;
                 writeln!(out, "Wrote config template: {}", target.display())?;
                 Ok(EXIT_OK)
             }
@@ -327,6 +370,7 @@ pub fn run_subcommand(
                 if json {
                     writeln!(out, "{}", serde_json::to_string_pretty(&cfg)?)?;
                 } else {
+                    write_cli_toml_banner(out)?;
                     writeln!(
                         out,
                         "# Active config source: {}",
@@ -340,6 +384,7 @@ pub fn run_subcommand(
             }
             ConfigAction::Validate => {
                 let (_, src) = ProfileConfig::resolve_from_disk(config_override, exe_dir)?;
+                write_cli_banner(out)?;
                 writeln!(
                     out,
                     "Configuration valid (source: {}).",
@@ -356,6 +401,7 @@ pub fn run_subcommand(
                 if json {
                     writeln!(out, "{}", serde_json::to_string_pretty(&users)?)?;
                 } else {
+                    write_cli_banner(out)?;
                     write!(out, "{}", format_users_table(&users))?;
                 }
                 Ok(EXIT_OK)
@@ -398,6 +444,10 @@ fn run_update_cmd(
     };
 
     let check = check_for_update(ops, repo, channel)?;
+    if !args.json {
+        write_cli_banner(out)?;
+        out.flush()?;
+    }
     if args.check || !check.update_available {
         if args.json {
             writeln!(out, "{}", serde_json::to_string_pretty(&check)?)?;
@@ -747,24 +797,26 @@ mod tests {
         let mut new_bin = b"MZ_NEW_CLI_BIN_V99".to_vec();
         new_bin.resize(128, 0xCC);
         let sum = crate::update::sha256_hex(&new_bin);
+        let release_json = r#"{
+            "tag_name": "v99.0.0",
+            "prerelease": false,
+            "published_at": "2026-11-11T00:00:00Z",
+            "html_url": "https://github.com/acme/it-tools/releases/tag/v99.0.0",
+            "body": "UAT tested release",
+            "assets": [
+                {"name": "it-tools.exe", "browser_download_url": "https://dl.example/it-tools.exe"},
+                {"name": "SHA256SUMS.txt", "browser_download_url": "https://dl.example/SHA256SUMS.txt"}
+            ]
+        }"#;
         {
             let mut st = ops.state.borrow_mut();
             st.http_responses.insert(
                 "https://api.github.com/repos/acme/it-tools/releases/latest".into(),
-                (
-                    200,
-                    br#"{
-                        "tag_name": "v99.0.0",
-                        "prerelease": false,
-                        "published_at": "2026-11-11T00:00:00Z",
-                        "html_url": "https://github.com/acme/it-tools/releases/tag/v99.0.0",
-                        "body": "UAT tested release",
-                        "assets": [
-                            {"name": "it-tools.exe", "browser_download_url": "https://dl.example/it-tools.exe"},
-                            {"name": "SHA256SUMS.txt", "browser_download_url": "https://dl.example/SHA256SUMS.txt"}
-                        ]
-                    }"#.to_vec(),
-                ),
+                (200, release_json.as_bytes().to_vec()),
+            );
+            st.http_responses.insert(
+                "https://api.github.com/repos/acme/it-tools/releases?per_page=20".into(),
+                (200, format!("[{release_json}]").into_bytes()),
             );
             st.http_responses.insert(
                 "https://dl.example/it-tools.exe".into(),
@@ -888,5 +940,71 @@ mod tests {
             )?;
             Ok((RuleOutcome::Applied, changes))
         }
+    }
+
+    #[test]
+    fn cli_help_and_human_outputs_include_banner_while_json_and_version_stay_clean() {
+        let err = parse_args(["it-tools", "--help"]).unwrap_err();
+        assert!(err.to_string().contains("$$$$$$/ $$$$$$$$/"));
+
+        let sub_err = parse_args(["it-tools", "check", "--help"]).unwrap_err();
+        assert!(sub_err.to_string().contains("$$$$$$/ $$$$$$$$/"));
+
+        let ver_err = parse_args(["it-tools", "--version"]).unwrap_err();
+        assert!(!ver_err.to_string().contains("$$$$$$/"));
+
+        let ops = FakeSystemOps::default();
+        let rules = fake_rules();
+        let dir = std::env::temp_dir().join(format!("it-tools-cli-bnr-{}", std::process::id()));
+
+        let cli_human = parse_args(["it-tools", "check"]).unwrap();
+        let mut out_human = Vec::new();
+        let mut err_buf = Vec::new();
+        let code = run_subcommand(
+            cli_human.command.unwrap(),
+            None,
+            &ops,
+            &rules,
+            &dir,
+            &mut out_human,
+            &mut err_buf,
+        )
+        .unwrap();
+        assert_eq!(code, EXIT_OK);
+        let human_s = String::from_utf8(out_human).unwrap();
+        assert!(human_s.starts_with(" ______  ________"));
+        assert!(human_s.contains("dummy_admin"));
+
+        let cli_json = parse_args(["it-tools", "check", "--json"]).unwrap();
+        let mut out_json = Vec::new();
+        let code_j = run_subcommand(
+            cli_json.command.unwrap(),
+            None,
+            &ops,
+            &rules,
+            &dir,
+            &mut out_json,
+            &mut err_buf,
+        )
+        .unwrap();
+        assert_eq!(code_j, EXIT_OK);
+        let parsed: serde_json::Value = serde_json::from_slice(&out_json).unwrap();
+        assert!(parsed.get("checks").is_some());
+
+        let cli_cfg = parse_args(["it-tools", "config", "show"]).unwrap();
+        let mut out_cfg = Vec::new();
+        run_subcommand(
+            cli_cfg.command.unwrap(),
+            None,
+            &ops,
+            &rules,
+            &dir,
+            &mut out_cfg,
+            &mut err_buf,
+        )
+        .unwrap();
+        let cfg_s = String::from_utf8(out_cfg).unwrap();
+        assert!(cfg_s.contains("$$$$$$/ $$$$$$$$/"));
+        let _: toml::Value = toml::from_str(&cfg_s).unwrap();
     }
 }

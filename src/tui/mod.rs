@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
@@ -857,14 +857,38 @@ fn tui_event_loop(
 }
 
 fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(10),
-            Constraint::Length(3),
-        ])
-        .split(frame.area());
+    let area = frame.area();
+    let show_ascii = area.height >= 22 && area.width >= crate::APP_BANNER_WIDTH as u16;
+    let (header_area, body_area, footer_area) = if show_ascii {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(9),
+                Constraint::Length(3),
+                Constraint::Min(7),
+                Constraint::Length(3),
+            ])
+            .split(area);
+        let banner = Paragraph::new(crate::APP_BANNER)
+            .alignment(Alignment::Center)
+            .style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            );
+        frame.render_widget(banner, chunks[0]);
+        (chunks[1], chunks[2], chunks[3])
+    } else {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(8),
+                Constraint::Length(3),
+            ])
+            .split(area);
+        (chunks[0], chunks[1], chunks[2])
+    };
 
     let admin_badge = if app.check_report.is_admin {
         Span::styled(
@@ -904,12 +928,12 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
             .borders(Borders::ALL)
             .title("System & Profile"),
     );
-    frame.render_widget(header, chunks[0]);
+    frame.render_widget(header, header_area);
 
     let main_cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(44), Constraint::Percentage(56)])
-        .split(chunks[1]);
+        .split(body_area);
 
     let items: Vec<ListItem> = rules
         .iter()
@@ -1016,7 +1040,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
 
     let footer = Paragraph::new(app.status_banner.as_str())
         .block(Block::default().borders(Borders::ALL).title("Controls"));
-    frame.render_widget(footer, chunks[2]);
+    frame.render_widget(footer, footer_area);
 
     draw_modal(frame, app);
 }
@@ -2048,13 +2072,18 @@ mod tests {
     #[test]
     fn tui_v_key_opens_update_check_modal() {
         let ops = FakeSystemOps::default();
-        ops.state.borrow_mut().http_responses.insert(
-            "https://api.github.com/repos/acme/it-tools/releases/latest".into(),
-            (
-                200,
-                br#"{"tag_name":"v99.0.0","prerelease":false,"published_at":"2026-11-11T00:00:00Z","html_url":"https://github.com/acme/it-tools/releases/tag/v99.0.0","body":"New features","assets":[]}"#.to_vec(),
-            ),
-        );
+        let release_json = r#"{"tag_name":"v99.0.0","prerelease":false,"published_at":"2026-11-11T00:00:00Z","html_url":"https://github.com/acme/it-tools/releases/tag/v99.0.0","body":"New features","assets":[]}"#;
+        {
+            let mut st = ops.state.borrow_mut();
+            st.http_responses.insert(
+                "https://api.github.com/repos/acme/it-tools/releases/latest".into(),
+                (200, release_json.as_bytes().to_vec()),
+            );
+            st.http_responses.insert(
+                "https://api.github.com/repos/acme/it-tools/releases?per_page=20".into(),
+                (200, format!("[{release_json}]").into_bytes()),
+            );
+        }
         let mut cfg = ProfileConfig::embedded_default();
         cfg.update.repo = Some("acme/it-tools".into());
         let dir = std::env::temp_dir().join(format!("it-tools-tui-upd-{}", std::process::id()));
@@ -2068,5 +2097,49 @@ mod tests {
             }
             other => panic!("expected ReportView modal, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn tui_draws_ascii_banner_on_standard_terminal_and_compacts_on_tiny_terminal() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let ops = FakeSystemOps::default();
+        let dir = std::env::temp_dir().join(format!("it-tools-tui-bnr-{}", std::process::id()));
+        let app = TuiApp::new(
+            &ops,
+            &[],
+            ProfileConfig::embedded_default(),
+            dir.join("it-tools.toml"),
+            dir,
+            vec![],
+        )
+        .unwrap();
+
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        term.draw(|f| draw_ui(f, &app, &[])).unwrap();
+        let buf = term.backend().buffer().clone();
+        let row_text = |y: u16| -> String {
+            (0..buf.area.width)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+        };
+        let top_rows: String = (0..9).map(row_text).collect::<Vec<_>>().join("\n");
+        assert!(top_rows.contains("$$$$$$/ $$$$$$$$/"));
+        assert!(top_rows.contains("$$$$$$$$/______"));
+
+        let mut tiny = Terminal::new(TestBackend::new(60, 18)).unwrap();
+        tiny.draw(|f| draw_ui(f, &app, &[])).unwrap();
+        let tiny_buf = tiny.backend().buffer().clone();
+        let tiny_all: String = (0..tiny_buf.area.height)
+            .map(|y| {
+                (0..tiny_buf.area.width)
+                    .map(|x| tiny_buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!tiny_all.contains("$$$$$$/"));
+        assert!(tiny_all.contains("Hardening Modules"));
     }
 }
