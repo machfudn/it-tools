@@ -49,10 +49,13 @@ jobs:
       - name: Resolve release version and channel metadata
         id: meta
         shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
         run: |
           if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-            $rawVer = "${{ inputs.version }}".Trim().TrimStart('v', 'V')
-            $channel = "${{ inputs.channel }}".Trim().ToLowerInvariant()
+            $rawVer = "$env:INPUT_VERSION".Trim().TrimStart('v', 'V')
+            $channel = "$env:INPUT_CHANNEL".Trim().ToLowerInvariant()
             if ($channel -eq "beta" -and -not $rawVer.Contains("-")) {
               $rawVer = "$rawVer-beta.${{ github.run_number }}"
             }
@@ -133,7 +136,11 @@ jobs:
           IT_TOOLS_GITHUB_REPO: ${{ github.repository }}
         run: |
           cargo build --release
+          if ($LASTEXITCODE -ne 0) {
+            throw "cargo build --release failed with exit code $LASTEXITCODE"
+          }
           $exe = ".\target\release\it-tools.exe"
+          if (-not (Test-Path $exe)) { throw "Missing $exe" }
           $vi = (Get-Item $exe).VersionInfo
           $vi | Select-Object ProductName, ProductVersion, FileVersion, FileDescription, OriginalFilename, Comments | Format-List
 
@@ -143,19 +150,33 @@ jobs:
           if ($vi.OriginalFilename -ne "it-tools.exe") {
             throw "OriginalFilename mismatch: $($vi.OriginalFilename)"
           }
+          if ([string]::IsNullOrWhiteSpace($vi.FileVersion)) {
+            throw "Missing FileVersion"
+          }
 
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $dumpbin = $null
           if (Test-Path $vswhere) {
             $vsPath = & $vswhere -latest -property installationPath
             $dumpbin = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" -Recurse -Filter "dumpbin.exe" -ErrorAction SilentlyContinue |
               Where-Object { $_.FullName -match 'Hostx64\\x64' } |
               Select-Object -First 1 -ExpandProperty FullName
-            if ($dumpbin) {
-              $imports = (& $dumpbin /IMPORTS $exe | Out-String)
-              if ($imports -match 'VCRUNTIME140|MSVCP140') {
-                throw "Portable binary must not depend on VC++ runtime DLLs"
-              }
+          }
+          if ($dumpbin) {
+            $imports = (& $dumpbin /IMPORTS $exe | Out-String)
+            if ($LASTEXITCODE -ne 0) {
+              throw "dumpbin failed with exit code $LASTEXITCODE"
             }
+            if ($imports -match 'VCRUNTIME140|MSVCP140') {
+              throw "Portable binary must not depend on VC++ runtime DLLs"
+            }
+            Write-Host "PE static CRT check passed via dumpbin.exe"
+          } else {
+            $raw = [System.IO.File]::ReadAllText($exe, [System.Text.Encoding]::ASCII)
+            if ($raw -match 'VCRUNTIME140\.dll|MSVCP140\.dll') {
+              throw "Portable binary references dynamic VC++ runtime DLLs"
+            }
+            Write-Host "PE static CRT check passed via ASCII scan"
           }
 
           $sizeBytes = (Get-Item $exe).Length
@@ -172,6 +193,8 @@ jobs:
 
           foreach ($cmdArgs in @(
             @('--version'),
+            @('--help'),
+            @('update', '--help'),
             @('config', 'init', '--out', 'dist\it-tools.toml', '--force'),
             @('--config', 'dist\it-tools.toml', 'config', 'validate'),
             @('check', '--json'),
@@ -210,13 +233,19 @@ jobs:
           $ch = "${{ steps.meta.outputs.channel }}"
           $chLabel = if ($ch -eq "beta") { "BETA / PRE-RELEASE (UAT Testing)" } else { "STABLE / PRODUCTION RELEASE" }
 
-          $prevTag = (& git for-each-ref --sort=-creatordate --format='%(refname:short)' refs/tags | Where-Object { $_ -ne $tag } | Select-Object -First 1)
+          [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+          $prevTag = (& git for-each-ref --sort=-creatordate --format='%(refname:short)' refs/tags 2>$null | Where-Object { $_ -ne $tag } | Select-Object -First 1)
+          $commitLines = ""
+          $prevLabel = "Initial"
           if ($prevTag) {
-            $commitLines = (& git log "$prevTag..HEAD" '--pretty=format:- %s (`%h`)' | Out-String).Trim()
-            $prevLabel = $prevTag
-          } else {
-            $commitLines = (& git log -n 20 '--pretty=format:- %s (`%h`)' | Out-String).Trim()
-            $prevLabel = "Initial"
+            $logOut = (& git log "$prevTag..HEAD" '--pretty=format:- %s (`%h`)' 2>$null | Out-String).Trim()
+            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($logOut)) {
+              $commitLines = $logOut
+              $prevLabel = $prevTag
+            }
+          }
+          if ([string]::IsNullOrWhiteSpace($commitLines)) {
+            $commitLines = (& git log -n 20 '--pretty=format:- %s (`%h`)' 2>$null | Out-String).Trim()
           }
           if ([string]::IsNullOrWhiteSpace($commitLines)) {
             $commitLines = "- Release build $tag"
@@ -294,15 +323,15 @@ jobs:
             Replace('__VER__', $ver).
             Replace('__CHANNEL_LABEL__', $chLabel).
             Replace('__BETA_NOTICE__', $betaNotice).
-            Replace('__EXTRA_BLOCK__', $extraBlock).
             Replace('__PREV_LABEL__', $prevLabel).
-            Replace('__COMMITS__', $commitLines).
             Replace('__SIZE_BYTES__', '${{ steps.build.outputs.size_bytes }}').
             Replace('__PASSED_TESTS__', '${{ steps.test.outputs.passed }}').
             Replace('__FILE_VERSION__', '${{ steps.build.outputs.file_version }}').
             Replace('__EXE_SHA__', '${{ steps.pkg.outputs.exe_sha256 }}').
             Replace('__ZIP_NAME__', '${{ steps.pkg.outputs.zip_name }}').
-            Replace('__ZIP_SHA__', '${{ steps.pkg.outputs.zip_sha256 }}')
+            Replace('__ZIP_SHA__', '${{ steps.pkg.outputs.zip_sha256 }}').
+            Replace('__EXTRA_BLOCK__', $extraBlock).
+            Replace('__COMMITS__', $commitLines)
 
           Set-Content -Path dist\RELEASE_NOTES.md -Value $notes -Encoding utf8
 

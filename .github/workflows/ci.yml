@@ -37,9 +37,16 @@ jobs:
       - name: Run Clippy lints
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Run unit and integration tests
+      - name: Run unit and integration tests (Stable env)
         run: cargo test
 
+      - name: Run unit and integration tests (Beta env)
+        env:
+          IT_TOOLS_CHANNEL: beta
+          IT_TOOLS_DISPLAY_VERSION: 0.1.0-beta.1
+          IT_TOOLS_BUILD_NUMBER: ${{ github.run_number }}
+          IT_TOOLS_GITHUB_REPO: ${{ github.repository }}
+        run: cargo test
       - name: Build static portable release executable
         shell: pwsh
         env:
@@ -54,6 +61,9 @@ jobs:
             $env:IT_TOOLS_DISPLAY_VERSION = $pkgVer
           }
           cargo build --release
+          if ($LASTEXITCODE -ne 0) {
+            throw "cargo build --release failed with exit code $LASTEXITCODE"
+          }
 
       - name: Verify PE Version Properties & zero VC++ runtime imports
         shell: pwsh
@@ -65,6 +75,7 @@ jobs:
           $vi | Select-Object ProductName, ProductVersion, FileVersion, FileDescription, OriginalFilename, Comments | Format-List
           if ($vi.ProductName -ne "IT-Tools") { throw "Unexpected ProductName: $($vi.ProductName)" }
           if ($vi.OriginalFilename -ne "it-tools.exe") { throw "Unexpected OriginalFilename: $($vi.OriginalFilename)" }
+          if ([string]::IsNullOrWhiteSpace($vi.ProductVersion)) { throw "Missing ProductVersion" }
           if ([string]::IsNullOrWhiteSpace($vi.FileVersion)) { throw "Missing FileVersion" }
 
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -77,6 +88,9 @@ jobs:
           }
           if ($dumpbin) {
             $imports = (& $dumpbin /IMPORTS $exe | Out-String)
+            if ($LASTEXITCODE -ne 0) {
+              throw "dumpbin failed with exit code $LASTEXITCODE"
+            }
             if ($imports -match 'VCRUNTIME140|MSVCP140') {
               throw "Portable binary must not import dynamic VC++ runtime DLLs"
             }
