@@ -17,6 +17,16 @@ use crate::platform::{LocalUserInfo, SystemOps};
 use crate::update::{
     UpdateChannel, check_for_update, current_channel, current_display_version, default_github_repo,
 };
+
+const CONTROLS_BAR: &str = "[Spasi] Aktif [e] Ubah [u] Akun [p] Simulasi [a] Terapkan [s] Simpan [b] Pulih [v] Update [d] Dok [q] Keluar";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationLevel {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TuiEffect {
     Continue,
@@ -87,6 +97,7 @@ pub struct TuiApp {
     pub check_report: CheckReport,
     pub selected_idx: usize,
     pub status_banner: String,
+    pub notification_level: NotificationLevel,
     pub modal: Modal,
     pub user_target: Option<UserTargetOptions>,
     pub relaunch_args: Vec<String>,
@@ -109,11 +120,55 @@ impl TuiApp {
             config_dirty: false,
             check_report,
             selected_idx: 0,
-            status_banner: "[Spasi] Aktif [e] Ubah [u] Akun [p] Simulasi [a] Terapkan [s] Simpan [b] Pulih [v] Update [d] Dok [q] Keluar".into(),
+            status_banner:
+                "Siap. Pilih modul lalu tekan tombol di Kontrol, atau [d] untuk dokumentasi.".into(),
+            notification_level: NotificationLevel::Info,
             modal: Modal::None,
             user_target: None,
             relaunch_args,
         })
+    }
+
+    pub fn set_notification(&mut self, level: NotificationLevel, msg: impl Into<String>) {
+        self.notification_level = level;
+        self.status_banner = msg.into();
+    }
+
+    fn notify_run_report(&mut self, prefix: &str, rep: &RunReport) {
+        let mut applied = 0usize;
+        let mut compliant = 0usize;
+        let mut warned = 0usize;
+        let mut failed = 0usize;
+        for e in &rep.entries {
+            match e.outcome {
+                RuleOutcome::Applied => applied += 1,
+                RuleOutcome::AlreadyCompliant => compliant += 1,
+                RuleOutcome::WarnTamperProtected { .. }
+                | RuleOutcome::WarnFirmwareLocked { .. }
+                | RuleOutcome::WarnEdgeRunning { .. } => warned += 1,
+                RuleOutcome::Skipped { .. } => {}
+                RuleOutcome::Failed { .. } => failed += 1,
+            }
+        }
+        let level = if failed > 0 {
+            NotificationLevel::Error
+        } else if warned > 0 {
+            NotificationLevel::Warning
+        } else {
+            NotificationLevel::Success
+        };
+        let backup_note = rep
+            .backup_file
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| format!(" | backup: {}", n.to_string_lossy()))
+            .unwrap_or_default();
+        self.set_notification(
+            level,
+            format!(
+                "{prefix}: {applied} diterapkan, {compliant} sesuai, {warned} peringatan, {failed} gagal{backup_note}."
+            ),
+        );
     }
 
     pub fn refresh_check(&mut self, ops: &dyn SystemOps, rules: &[Box<dyn Rule>]) -> Result<()> {
@@ -156,6 +211,12 @@ impl TuiApp {
                                 apply_fields_to_config(&mut self.cfg, &rule_id, &fields);
                                 self.config_dirty = true;
                                 self.refresh_check(ops, rules)?;
+                                self.set_notification(
+                                    NotificationLevel::Info,
+                                    format!(
+                                        "Parameter '{rule_id}' diubah (tekan [s] untuk simpan)."
+                                    ),
+                                );
                             }
                             self.modal = Modal::EditFields {
                                 rule_id,
@@ -224,6 +285,12 @@ impl TuiApp {
                                     apply_fields_to_config(&mut self.cfg, &rule_id, &fields);
                                     self.config_dirty = true;
                                     self.refresh_check(ops, rules)?;
+                                    self.set_notification(
+                                        NotificationLevel::Info,
+                                        format!(
+                                            "Parameter '{rule_id}' diubah (tekan [s] untuk simpan)."
+                                        ),
+                                    );
                                     self.modal = Modal::EditFields {
                                         rule_id,
                                         fields,
@@ -239,6 +306,12 @@ impl TuiApp {
                                     apply_fields_to_config(&mut self.cfg, &rule_id, &fields);
                                     self.config_dirty = true;
                                     self.refresh_check(ops, rules)?;
+                                    self.set_notification(
+                                        NotificationLevel::Info,
+                                        format!(
+                                            "Parameter '{rule_id}' diubah (tekan [s] untuk simpan)."
+                                        ),
+                                    );
                                     self.modal = Modal::EditFields {
                                         rule_id,
                                         fields,
@@ -257,6 +330,12 @@ impl TuiApp {
                                     apply_fields_to_config(&mut self.cfg, &rule_id, &fields);
                                     self.config_dirty = true;
                                     self.refresh_check(ops, rules)?;
+                                    self.set_notification(
+                                        NotificationLevel::Info,
+                                        format!(
+                                            "Parameter '{rule_id}' diubah (tekan [s] untuk simpan)."
+                                        ),
+                                    );
                                     self.modal = Modal::EditFields {
                                         rule_id,
                                         fields,
@@ -274,6 +353,12 @@ impl TuiApp {
                                     apply_fields_to_config(&mut self.cfg, &rule_id, &fields);
                                     self.config_dirty = true;
                                     self.refresh_check(ops, rules)?;
+                                    self.set_notification(
+                                        NotificationLevel::Info,
+                                        format!(
+                                            "Parameter '{rule_id}' diubah (tekan [s] untuk simpan)."
+                                        ),
+                                    );
                                     self.modal = Modal::EditFields {
                                         rule_id,
                                         fields,
@@ -414,7 +499,10 @@ impl TuiApp {
                     }
                     KeyCode::Char('c') => {
                         self.user_target = None;
-                        self.status_banner = "Target akun opsional dikosongkan.".into();
+                        self.set_notification(
+                            NotificationLevel::Info,
+                            "Target akun opsional dikosongkan.",
+                        );
                     }
                     KeyCode::Enter => {
                         if matches!(
@@ -439,8 +527,10 @@ impl TuiApp {
                             };
                             if !create_name.trim().is_empty() {
                                 if pw_opt.is_none() {
-                                    self.status_banner =
-                                        "Akun baru wajib memiliki kata sandi sementara yang tidak kosong.".into();
+                                    self.set_notification(
+                                        NotificationLevel::Warning,
+                                        "Akun baru wajib memiliki kata sandi sementara yang tidak kosong.",
+                                    );
                                     self.modal = Modal::UserPicker {
                                         users,
                                         cursor,
@@ -458,8 +548,10 @@ impl TuiApp {
                                     clear_dont_expire,
                                     temp_password: pw_opt,
                                 });
-                                self.status_banner =
-                                    format!("Target akun: buat '{}'", create_name.trim());
+                                self.set_notification(
+                                    NotificationLevel::Success,
+                                    format!("Target akun disetel: buat '{}'.", create_name.trim()),
+                                );
                             } else if let Some(u) = users.get(cursor) {
                                 self.user_target = Some(UserTargetOptions {
                                     username: u.name.clone(),
@@ -467,7 +559,10 @@ impl TuiApp {
                                     clear_dont_expire,
                                     temp_password: pw_opt,
                                 });
-                                self.status_banner = format!("Target akun: '{}'", u.name);
+                                self.set_notification(
+                                    NotificationLevel::Success,
+                                    format!("Target akun disetel: '{}'.", u.name),
+                                );
                             }
                         }
                     }
@@ -517,6 +612,7 @@ impl TuiApp {
                     };
                     let report = apply_rules(ops, &self.cfg, rules, &opts, &self.exe_dir)?;
                     self.show_run_report("Terapkan (Khusus HKCU)", &report);
+                    self.notify_run_report("Penerapan khusus HKCU selesai", &report);
                     self.refresh_check(ops, rules)?;
                     Ok(TuiEffect::Continue)
                 }
@@ -544,11 +640,20 @@ impl TuiApp {
                     if let Some(path) = files.get(cursor) {
                         let snap = BackupSnapshot::load_from_file(path)?;
                         let actions = rollback_snapshot(ops, &snap)?;
+                        let count = actions.len();
                         self.modal = Modal::ReportView {
                             title: format!("Pemulihan: {}", path.display()),
                             lines: actions,
                             scroll: 0,
                         };
+                        let name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| path.display().to_string());
+                        self.set_notification(
+                            NotificationLevel::Success,
+                            format!("Pemulihan berhasil dari {name} ({count} aksi)."),
+                        );
                         self.refresh_check(ops, rules)?;
                     }
                     Ok(TuiEffect::Continue)
@@ -641,7 +746,10 @@ impl TuiApp {
                     } else {
                         "dinonaktifkan"
                     };
-                    self.status_banner = format!("Modul '{id}' {state_lbl}.");
+                    self.set_notification(
+                        NotificationLevel::Info,
+                        format!("Modul '{id}' {state_lbl} (tekan [s] untuk simpan)."),
+                    );
                 }
             }
             KeyCode::Char('e') | KeyCode::Enter => {
@@ -671,12 +779,20 @@ impl TuiApp {
                 self.cfg.validate()?;
                 self.cfg.save_toml(&self.config_path)?;
                 self.config_dirty = false;
-                self.status_banner =
-                    format!("Konfigurasi disimpan ke {}", self.config_path.display());
+                self.set_notification(
+                    NotificationLevel::Success,
+                    format!(
+                        "Konfigurasi berhasil disimpan ke {}.",
+                        self.config_path.display()
+                    ),
+                );
             }
             KeyCode::Char('r') => {
                 self.refresh_check(ops, rules)?;
-                self.status_banner = "Pemeriksaan kepatuhan disegarkan.".into();
+                self.set_notification(
+                    NotificationLevel::Success,
+                    "Pemeriksaan kepatuhan berhasil disegarkan.",
+                );
             }
             KeyCode::Char('p') => {
                 let opts = ApplyOptions {
@@ -686,6 +802,10 @@ impl TuiApp {
                 };
                 let rep = apply_rules(ops, &self.cfg, rules, &opts, &self.exe_dir)?;
                 self.show_run_report("Pratinjau Perubahan (Simulasi)", &rep);
+                self.set_notification(
+                    NotificationLevel::Info,
+                    "Simulasi (Dry-Run) selesai; tidak ada perubahan ke Windows.",
+                );
             }
             KeyCode::Char('a') => {
                 let needs_admin = rules
@@ -700,8 +820,10 @@ impl TuiApp {
             KeyCode::Char('b') => {
                 let files = list_backup_files(&self.exe_dir)?;
                 if files.is_empty() {
-                    self.status_banner =
-                        "File backup it-tools.backup.*.json tidak ditemukan di dekat exe.".into();
+                    self.set_notification(
+                        NotificationLevel::Warning,
+                        "File backup it-tools.backup.*.json tidak ditemukan di dekat exe.",
+                    );
                 } else {
                     self.modal = Modal::RollbackPicker { files, cursor: 0 };
                 }
@@ -746,6 +868,10 @@ impl TuiApp {
                 ],
                 scroll: 0,
             };
+            self.set_notification(
+                NotificationLevel::Warning,
+                "Repositori pembaruan belum dikonfigurasi pada build ini.",
+            );
             return;
         };
 
@@ -772,13 +898,32 @@ impl TuiApp {
                     lines.push("--- Catatan Rilis ---".into());
                     lines.extend(res.release_notes.lines().map(str::to_string));
                 }
+                let (lvl, msg) = if res.update_available {
+                    (
+                        NotificationLevel::Info,
+                        format!(
+                            "Pembaruan tersedia: v{} ({}).",
+                            res.latest_version, res.channel
+                        ),
+                    )
+                } else {
+                    (
+                        NotificationLevel::Success,
+                        format!("Aplikasi sudah versi terbaru (v{}).", res.current_version),
+                    )
+                };
                 self.modal = Modal::ReportView {
                     title: "Versi & Pembaruan".into(),
                     lines,
                     scroll: 0,
                 };
+                self.set_notification(lvl, msg);
             }
             Err(e) => {
+                self.set_notification(
+                    NotificationLevel::Error,
+                    format!("Gagal cek pembaruan: {e}"),
+                );
                 self.modal = Modal::ReportView {
                     title: "Versi & Pembaruan (Gagal Cek)".into(),
                     lines: vec![
@@ -813,6 +958,7 @@ impl TuiApp {
         };
         let rep = apply_rules(ops, &self.cfg, rules, &opts, &self.exe_dir)?;
         self.show_run_report("Hasil Penerapan", &rep);
+        self.notify_run_report("Penerapan selesai", &rep);
         self.refresh_check(ops, rules)?;
         Ok(())
     }
@@ -887,21 +1033,27 @@ fn tui_event_loop(
         if event::poll(Duration::from_millis(200))?
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
-            && let TuiEffect::Quit(code) = app.handle_key(key.code, ops, rules)?
         {
-            return Ok(code);
+            match app.handle_key(key.code, ops, rules) {
+                Ok(TuiEffect::Quit(code)) => return Ok(code),
+                Ok(TuiEffect::Continue) => {}
+                Err(err) => {
+                    app.set_notification(NotificationLevel::Error, format!("Galat: {err:#}"));
+                }
+            }
         }
     }
 }
 
 fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
     let area = frame.area();
-    let show_ascii = area.height >= 22 && area.width >= crate::APP_BANNER_WIDTH as u16;
-    let (header_area, body_area, footer_area) = if show_ascii {
+    let show_ascii = area.height >= 25 && area.width >= crate::APP_BANNER_WIDTH as u16;
+    let (header_area, notif_area, body_area, footer_area) = if show_ascii {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(9),
+                Constraint::Length(3),
                 Constraint::Length(3),
                 Constraint::Min(6),
                 Constraint::Length(4),
@@ -915,17 +1067,18 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
                     .add_modifier(Modifier::BOLD),
             );
         frame.render_widget(banner, chunks[0]);
-        (chunks[1], chunks[2], chunks[3])
+        (chunks[1], chunks[2], chunks[3], chunks[4])
     } else {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),
-                Constraint::Min(7),
+                Constraint::Length(3),
+                Constraint::Min(5),
                 Constraint::Length(4),
             ])
             .split(area);
-        (chunks[0], chunks[1], chunks[2])
+        (chunks[0], chunks[1], chunks[2], chunks[3])
     };
 
     let admin_badge = if app.check_report.is_admin {
@@ -971,6 +1124,44 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
             .title("Sistem & Profil"),
     );
     frame.render_widget(header, header_area);
+
+    let (notif_tag, notif_style) = match app.notification_level {
+        NotificationLevel::Info => (
+            " INFO ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        NotificationLevel::Success => (
+            " BERHASIL ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        NotificationLevel::Warning => (
+            " PERINGATAN ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        NotificationLevel::Error => (
+            " GALAT ",
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        ),
+    };
+    let notif = Paragraph::new(Line::from(vec![
+        Span::styled(notif_tag, notif_style),
+        Span::raw(format!(" {}", app.status_banner)),
+    ]))
+    .wrap(Wrap { trim: false })
+    .block(Block::default().borders(Borders::ALL).title("Notifikasi"));
+    frame.render_widget(notif, notif_area);
 
     let main_cols = Layout::default()
         .direction(Direction::Horizontal)
@@ -1086,7 +1277,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
         );
     frame.render_widget(detail, main_cols[1]);
 
-    let footer = Paragraph::new(app.status_banner.as_str())
+    let footer = Paragraph::new(CONTROLS_BAR)
         .wrap(Wrap { trim: false })
         .block(Block::default().borders(Borders::ALL).title("Kontrol"));
     frame.render_widget(footer, footer_area);
@@ -2346,7 +2537,8 @@ mod tests {
             vec![],
         )
         .unwrap();
-        assert!(app.status_banner.contains("[d] Dok"));
+        assert!(CONTROLS_BAR.contains("[d] Dok"));
+        assert!(app.status_banner.contains("Siap."));
 
         app.handle_key(KeyCode::Char('d'), &ops, &[]).unwrap();
         match &app.modal {
@@ -2391,5 +2583,74 @@ mod tests {
 
         app.handle_key(KeyCode::Esc, &ops, &[]).unwrap();
         assert!(matches!(app.modal, Modal::None));
+    }
+
+    #[test]
+    fn tui_notifications_render_below_system_profile_without_overwriting_controls() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let ops = FakeSystemOps::default();
+        let dir = std::env::temp_dir().join(format!("it-tools-tui-notif-{}", std::process::id()));
+        let rules = crate::rules::all_rules();
+        let mut app = TuiApp::new(
+            &ops,
+            &rules,
+            ProfileConfig::embedded_default(),
+            dir.join("it-tools.toml"),
+            dir.clone(),
+            vec![],
+        )
+        .unwrap();
+
+        app.handle_key(KeyCode::Char('r'), &ops, &rules).unwrap();
+        assert_eq!(app.notification_level, NotificationLevel::Success);
+
+        let mut term = Terminal::new(TestBackend::new(110, 32)).unwrap();
+        term.draw(|f| draw_ui(f, &app, &rules)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let rows: Vec<String> = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect();
+        let find_row = |needle: &str| -> usize {
+            rows.iter()
+                .position(|r| r.contains(needle))
+                .unwrap_or_else(|| {
+                    panic!("missing `{needle}` in rendered UI:\n{}", rows.join("\n"))
+                })
+        };
+        let sys_y = find_row("Sistem & Profil");
+        let notif_y = find_row("Notifikasi");
+        let mod_y = find_row("Modul Pengamanan");
+        let ctrl_y = find_row("Kontrol");
+        assert!(sys_y < notif_y && notif_y < mod_y && mod_y < ctrl_y);
+        assert!(rows[notif_y + 1].contains("BERHASIL"));
+        assert!(rows[notif_y + 1].contains("Pemeriksaan kepatuhan berhasil disegarkan."));
+
+        let ctrl_block = rows[ctrl_y..].join("\n");
+        assert!(ctrl_block.contains("[Spasi] Aktif"));
+        assert!(ctrl_block.contains("[d] Dok"));
+        assert!(ctrl_block.contains("[q] Keluar"));
+
+        app.handle_key(KeyCode::Char(' '), &ops, &rules).unwrap();
+        assert_eq!(app.notification_level, NotificationLevel::Info);
+        term.draw(|f| draw_ui(f, &app, &rules)).unwrap();
+        let buf2 = term.backend().buffer().clone();
+        let rows2: Vec<String> = (0..buf2.area.height)
+            .map(|y| {
+                (0..buf2.area.width)
+                    .map(|x| buf2[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect();
+        assert!(rows2[notif_y + 1].contains("INFO"));
+        assert!(rows2[notif_y + 1].contains("dinonaktifkan"));
+        assert!(rows2[ctrl_y..].join("\n").contains("[Spasi] Aktif"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
