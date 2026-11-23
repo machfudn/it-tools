@@ -1138,15 +1138,19 @@ fn tui_event_loop(
 
 fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
     let area = frame.area();
-    let show_ascii = area.height >= 25 && area.width >= crate::APP_BANNER_WIDTH as u16;
+    let show_ascii = area.height >= 28 && area.width >= crate::APP_BANNER_WIDTH as u16;
     let (header_area, notif_area, body_area, footer_area) = if show_ascii {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(9),
+                Constraint::Length(1),
                 Constraint::Length(3),
+                Constraint::Length(1),
                 Constraint::Length(3),
+                Constraint::Length(1),
                 Constraint::Min(6),
+                Constraint::Length(1),
                 Constraint::Length(4),
             ])
             .split(area);
@@ -1158,18 +1162,21 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
                     .add_modifier(Modifier::BOLD),
             );
         frame.render_widget(banner, chunks[0]);
-        (chunks[1], chunks[2], chunks[3], chunks[4])
+        (chunks[2], chunks[4], chunks[6], chunks[8])
     } else {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),
+                Constraint::Length(1),
                 Constraint::Length(3),
+                Constraint::Length(1),
                 Constraint::Min(5),
+                Constraint::Length(1),
                 Constraint::Length(4),
             ])
             .split(area);
-        (chunks[0], chunks[1], chunks[2], chunks[3])
+        (chunks[0], chunks[2], chunks[4], chunks[6])
     };
 
     let admin_badge = if app.check_report.is_admin {
@@ -1194,7 +1201,26 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
     } else {
         ""
     };
-    let header = Paragraph::new(Line::from(vec![
+
+    let mut compliant_count = 0usize;
+    let mut drifted_count = 0usize;
+    let mut needs_admin_count = 0usize;
+    let mut unsupported_count = 0usize;
+    for r in rules {
+        if !is_rule_enabled(&app.cfg, r.id()) {
+            continue;
+        }
+        if let Some(chk) = app.check_for(r.id()) {
+            match chk.status {
+                CheckStatus::Compliant => compliant_count += 1,
+                CheckStatus::Drifted => drifted_count += 1,
+                CheckStatus::NeedsAdmin => needs_admin_count += 1,
+                CheckStatus::Unsupported => unsupported_count += 1,
+            }
+        }
+    }
+
+    let mut header_spans = vec![
         Span::styled(
             format!(" IT-Tools v{} ", current_display_version()),
             Style::default()
@@ -1202,14 +1228,37 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
                 .add_modifier(Modifier::BOLD),
         ),
         admin_badge,
-        Span::raw(format!(
-            "  {}  |  Konfigurasi: {}{}",
-            app.check_report.os_caption,
-            app.config_path.display(),
-            dirty_mark
-        )),
-    ]))
-    .block(
+        Span::raw(format!("  {}  |  ", app.check_report.os_caption)),
+        Span::styled(
+            format!("✔ {compliant_count} Sesuai"),
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  ·  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("⚠ {drifted_count} Berubah"),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  ·  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("🔒 {needs_admin_count} Butuh Admin"),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    if unsupported_count > 0 {
+        header_spans.push(Span::styled("  ·  ", Style::default().fg(Color::DarkGray)));
+        header_spans.push(Span::styled(
+            format!("✖ {unsupported_count} Kendala"),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ));
+    }
+    header_spans.push(Span::styled("  |  ", Style::default().fg(Color::DarkGray)));
+    header_spans.push(Span::raw(format!(
+        "Konfigurasi: {}{}",
+        app.config_path.file_name().unwrap_or_default().to_string_lossy(),
+        dirty_mark
+    )));
+
+    let header = Paragraph::new(Line::from(header_spans)).block(
         Block::default()
             .borders(Borders::ALL)
             .title("Sistem & Profil"),
@@ -1263,29 +1312,34 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
         .iter()
         .map(|r| {
             let enabled = is_rule_enabled(&app.cfg, r.id());
-            let mark = if enabled { "[x]" } else { "[ ]" };
+            let mark_span = if enabled {
+                Span::styled("[x] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            } else {
+                Span::styled("[ ] ", Style::default().fg(Color::DarkGray))
+            };
             let status_span = if !enabled {
-                Span::styled("NONAKTIF", Style::default().fg(Color::DarkGray))
+                Span::styled("○ NONAKTIF", Style::default().fg(Color::DarkGray))
             } else if let Some(chk) = app.check_for(r.id()) {
                 match chk.status {
                     CheckStatus::Compliant => {
-                        Span::styled("SESUAI", Style::default().fg(Color::Green))
+                        Span::styled("✔ SESUAI", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
                     }
                     CheckStatus::Drifted => {
-                        Span::styled("BERUBAH", Style::default().fg(Color::Yellow))
+                        Span::styled("⚠ BERUBAH", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
                     }
                     CheckStatus::NeedsAdmin => {
-                        Span::styled("ADMIN", Style::default().fg(Color::Red))
+                        Span::styled("🔒 ADMIN", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
                     }
                     CheckStatus::Unsupported => {
-                        Span::styled("KENDALA", Style::default().fg(Color::Magenta))
+                        Span::styled("✖ KENDALA", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
                     }
                 }
             } else {
                 Span::raw("-")
             };
             ListItem::new(Line::from(vec![
-                Span::raw(format!("{mark} {:<19} ", r.id())),
+                mark_span,
+                Span::raw(format!("{:<22} ", r.title())),
                 status_span,
             ]))
         })
@@ -1308,55 +1362,79 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
 
     let mut detail_lines = Vec::new();
     if let Some(r) = rules.get(app.selected_idx) {
-        detail_lines.push(Line::from(Span::styled(
-            format!("{} ({})", r.title(), r.id()),
-            Style::default().add_modifier(Modifier::BOLD),
-        )));
-        detail_lines.push(Line::from(format!(
-            "Cakupan: {} | Aktif: {}",
-            if r.requires_admin() {
-                "Admin (HKLM/Sistem)"
-            } else {
-                "Standar (HKCU)"
-            },
-            if is_rule_enabled(&app.cfg, r.id()) {
-                "Ya"
-            } else {
-                "Tidak"
-            }
-        )));
-        if let Some(ut) = &app.user_target {
-            detail_lines.push(Line::from(format!(
-                "Target Akun Opsional: {} ({})",
-                ut.username,
-                if ut.create_if_missing {
-                    "buat baru"
-                } else {
-                    "sudah ada"
-                }
-            )));
+        detail_lines.push(Line::from(vec![
+            Span::styled(format!("{} ", r.title()), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("({})", r.id()), Style::default().fg(Color::DarkGray)),
+        ]));
+
+        let scope_span = if r.requires_admin() {
+            Span::styled(" Administrator (HKLM / System) ", Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD))
+        } else {
+            Span::styled(" Standar (HKCU) ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD))
+        };
+        let is_active = is_rule_enabled(&app.cfg, r.id());
+        let active_span = if is_active {
+            Span::styled(" Aktif ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD))
+        } else {
+            Span::styled(" Nonaktif ", Style::default().fg(Color::White).bg(Color::DarkGray))
+        };
+        detail_lines.push(Line::from(vec![
+            Span::raw("Cakupan: "),
+            scope_span,
+            Span::raw("   Status: "),
+            active_span,
+        ]));
+
+        let desc = r.description();
+        if !desc.is_empty() {
+            detail_lines.push(Line::from(""));
+            detail_lines.push(Line::from(vec![
+                Span::styled("Fungsi: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::raw(desc),
+            ]));
         }
+
+        if let Some(ut) = &app.user_target {
+            detail_lines.push(Line::from(vec![
+                Span::styled("Target Akun Opsional: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(format!("{} ({})", ut.username, if ut.create_if_missing { "buat baru" } else { "sudah ada" })),
+            ]));
+        }
+
         detail_lines.push(Line::from(""));
-        detail_lines.push(Line::from(Span::styled(
-            "Perbedaan Saat Ini:",
-            Style::default().fg(Color::Cyan),
-        )));
         if let Some(chk) = app.check_for(r.id()) {
             if chk.diffs.is_empty() {
-                detail_lines.push(Line::from("  (tidak ada - sudah sesuai)"));
+                detail_lines.push(Line::from(vec![
+                    Span::styled("Status Kepatuhan: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                    Span::styled("✔ Sudah Sesuai Target (Compliant)", Style::default().fg(Color::Green)),
+                ]));
             } else {
+                detail_lines.push(Line::from(vec![
+                    Span::styled("Perbedaan Saat Ini ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("({} item):", chk.diffs.len()), Style::default().fg(Color::Yellow)),
+                ]));
                 for d in &chk.diffs {
-                    detail_lines.push(Line::from(format!(
-                        "  - {}: {} -> {}",
-                        d.field, d.current, d.target
-                    )));
+                    detail_lines.push(Line::from(vec![
+                        Span::styled("  • ", Style::default().fg(Color::Cyan)),
+                        Span::styled(&d.field, Style::default().fg(Color::White)),
+                    ]));
+                    detail_lines.push(Line::from(vec![
+                        Span::raw("      Saat ini : "),
+                        Span::styled(&d.current, Style::default().fg(Color::LightRed)),
+                        Span::raw("  ->  Target : "),
+                        Span::styled(&d.target, Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)),
+                    ]));
                 }
             }
             if let Some(note) = &chk.note {
-                detail_lines.push(Line::from(format!("Catatan: {note}")));
+                detail_lines.push(Line::from(""));
+                detail_lines.push(Line::from(vec![
+                    Span::styled("Catatan: ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                    Span::raw(note),
+                ]));
             }
         } else {
-            detail_lines.push(Line::from("  (modul dinonaktifkan di konfigurasi)"));
+            detail_lines.push(Line::from(Span::styled("  (modul dinonaktifkan di konfigurasi)", Style::default().fg(Color::DarkGray))));
         }
     }
     let detail = Paragraph::new(detail_lines)
@@ -1368,7 +1446,12 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
         );
     frame.render_widget(detail, main_cols[1]);
 
-    let footer = Paragraph::new(CONTROLS_BAR)
+    let footer_text = if area.width >= 80 {
+        format!("{CONTROLS_BAR}  [r] Segarkan")
+    } else {
+        CONTROLS_BAR.to_string()
+    };
+    let footer = Paragraph::new(footer_text)
         .wrap(Wrap { trim: false })
         .block(Block::default().borders(Borders::ALL).title("Kontrol"));
     frame.render_widget(footer, footer_area);
@@ -1548,9 +1631,41 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
             scroll,
             update,
         } => {
-            let area = centered_rect(82, 78, frame.area());
+            let area = centered_rect(84, 80, frame.area());
             frame.render_widget(Clear, area);
-            let text: Vec<Line> = lines.iter().map(|s| Line::from(s.as_str())).collect();
+            let text: Vec<Line> = lines
+                .iter()
+                .map(|s| {
+                    if s.starts_with("===") {
+                        Line::from(Span::styled(
+                            s.as_str(),
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ))
+                    } else if s.starts_with("  SESUAI")
+                        || s.contains("diterapkan")
+                        || s.contains("sesuai")
+                    {
+                        Line::from(Span::styled(
+                            s.as_str(),
+                            Style::default().fg(Color::LightGreen),
+                        ))
+                    } else if s.starts_with("  BERUBAH") || s.contains("peringatan") {
+                        Line::from(Span::styled(
+                            s.as_str(),
+                            Style::default().fg(Color::Yellow),
+                        ))
+                    } else if s.contains("gagal") || s.starts_with("  GALAT") {
+                        Line::from(Span::styled(
+                            s.as_str(),
+                            Style::default().fg(Color::LightRed),
+                        ))
+                    } else {
+                        Line::from(s.as_str())
+                    }
+                })
+                .collect();
             let footer_hint = if update.is_some() {
                 "[u] Unduh & Pasang, [j/k/PgUp/PgDn] gulir, [Esc] tutup"
             } else {
@@ -1761,8 +1876,8 @@ pub fn toggle_rule_enabled(cfg: &mut ProfileConfig, id: &str) {
 
 fn format_field_value(kind: &FieldKind) -> String {
     match kind {
-        FieldKind::Bool(true) => "Ya".into(),
-        FieldKind::Bool(false) => "Tidak".into(),
+        FieldKind::Bool(true) => "[● AKTIF / True]".into(),
+        FieldKind::Bool(false) => "[○ NONAKTIF / False]".into(),
         FieldKind::Text(s) => s.clone(),
         FieldKind::U32(n) => n.to_string(),
         FieldKind::Alignment(TaskbarAlignment::Left) => "Kiri (Left)".into(),
