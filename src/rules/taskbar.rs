@@ -70,6 +70,10 @@ impl Rule for TaskbarRule {
         "Taskbar"
     }
 
+    fn description(&self) -> &'static str {
+        "Mengatur taskbar alignment (left/center), auto-hide, serta menonaktifkan Widgets, badges, dan flashing."
+    }
+
     fn requires_admin(&self) -> bool {
         false
     }

@@ -112,6 +112,10 @@ impl Rule for VisualEffectsRule {
         "Visual Effects"
     }
 
+    fn description(&self) -> &'static str {
+        "Menonaktifkan animasi jendela, bayangan kursor, dan transparansi UI untuk meningkatkan responsivitas desktop."
+    }
+
     fn requires_admin(&self) -> bool {
         false
     }

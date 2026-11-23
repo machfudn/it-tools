@@ -40,6 +40,9 @@ pub struct ApplyOptions {
 pub trait Rule {
     fn id(&self) -> &'static str;
     fn title(&self) -> &'static str;
+    fn description(&self) -> &'static str {
+        ""
+    }
     fn requires_admin(&self) -> bool;
     fn is_enabled(&self, cfg: &ProfileConfig) -> bool;
     fn check(&self, ops: &dyn SystemOps, cfg: &ProfileConfig) -> Result<RuleCheck>;

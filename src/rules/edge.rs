@@ -111,6 +111,10 @@ impl Rule for EdgeRule {
         "Microsoft Edge"
     }
 
+    fn description(&self) -> &'static str {
+        "Menonaktifkan startup boost, prelaunch tab background, dan mengaktifkan SmartScreen PUA protection."
+    }
+
     fn requires_admin(&self) -> bool {
         true
     }

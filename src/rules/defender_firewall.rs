@@ -32,6 +32,10 @@ impl Rule for DefenderFirewallRule {
         RULE_TITLE
     }
 
+    fn description(&self) -> &'static str {
+        "Memastikan Defender realtime protection aktif, firewall profile ON, dan mengizinkan rule ICMP echo."
+    }
+
     fn requires_admin(&self) -> bool {
         true
     }

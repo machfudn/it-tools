@@ -46,6 +46,10 @@ impl Rule for ScreensaverRule {
         "Screen Saver"
     }
 
+    fn description(&self) -> &'static str {
+        "Mengaktifkan screen saver lock otomatis setelah 5 menit dengan proteksi resume password."
+    }
+
     fn requires_admin(&self) -> bool {
         false
     }

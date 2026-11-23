@@ -185,6 +185,10 @@ impl Rule for StartupAppsRule {
         "Startup Apps"
     }
 
+    fn description(&self) -> &'static str {
+        "Mendisposisikan aplikasi startup non-allowlist pada registry Run dan StartupApproved (HKCU/HKLM)."
+    }
+
     fn requires_admin(&self) -> bool {
         true
     }

@@ -110,6 +110,10 @@ impl Rule for TypingRule {
         "Typing"
     }
 
+    fn description(&self) -> &'static str {
+        "Menonaktifkan autocorrect, spell check, text prediction, dan pengumpulan typing insights."
+    }
+
     fn requires_admin(&self) -> bool {
         false
     }

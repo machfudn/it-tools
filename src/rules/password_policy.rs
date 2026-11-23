@@ -22,6 +22,10 @@ impl Rule for PasswordPolicyRule {
         RULE_TITLE
     }
 
+    fn description(&self) -> &'static str {
+        "Menerapkan password history, complexity, lockout threshold via secedit, dan provisioning akun lokal."
+    }
+
     fn requires_admin(&self) -> bool {
         true
     }

@@ -29,6 +29,10 @@ impl Rule for AccessibilityRule {
         "Accessibility"
     }
 
+    fn description(&self) -> &'static str {
+        "Mempertahankan fungsi klasik tombol PrintScreen tanpa intercept Snipping Tool."
+    }
+
     fn requires_admin(&self) -> bool {
         false
     }

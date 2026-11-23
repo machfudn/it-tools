@@ -138,6 +138,10 @@ impl Rule for DiagnosticsRule {
         "Diagnostic & Feedback"
     }
 
+    fn description(&self) -> &'static str {
+        "Membatasi pengiriman diagnostic telemetry ke level minimal dan menonaktifkan feedback prompts SIUF Windows."
+    }
+
     fn requires_admin(&self) -> bool {
         true
     }

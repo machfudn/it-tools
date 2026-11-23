@@ -56,6 +56,10 @@ impl Rule for PowerRule {
         "Power Settings"
     }
 
+    fn description(&self) -> &'static str {
+        "Mengaktifkan High Performance power plan, menonaktifkan hibernate, dan mengoptimalkan sleep timeouts."
+    }
+
     fn requires_admin(&self) -> bool {
         true
     }

@@ -94,6 +94,10 @@ impl Rule for SearchRule {
         "Search Permission"
     }
 
+    fn description(&self) -> &'static str {
+        "Menonaktifkan Bing Cloud Search, Work/School Search, dan Search Highlights di menu Start."
+    }
+
     fn requires_admin(&self) -> bool {
         true
     }

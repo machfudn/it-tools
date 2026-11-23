@@ -34,6 +34,10 @@ impl Rule for SystemRestoreRule {
         "System Restore"
     }
 
+    fn description(&self) -> &'static str {
+        "Mengaktifkan System Protection pada drive C: dan membatasi kuota shadow storage VSS pada 5GB."
+    }
+
     fn requires_admin(&self) -> bool {
         true
     }
