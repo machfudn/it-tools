@@ -1,35 +1,35 @@
 # IT-Tools
 
-Portable single-file Windows 10/11 workstation hardening, tuning, and provisioning utility with an interactive Terminal UI (TUI) and automation-ready CLI.
+Utilitas portabel satu berkas untuk hardening, penyesuaian performa, dan provisioning workstation Windows 10/11 dengan antarmuka Terminal Interaktif (TUI) dan antarmuka baris perintah (CLI) yang siap untuk otomatisasi.
 
 > [!NOTE]
-> **Zero installation required.** `it-tools.exe` is compiled with a fully static C/C++ runtime and has no external DLL, `.NET`, or VC++ Redistributable dependencies. Copy it to any folder or USB drive and run directly on Windows 10 or Windows 11 (Home, Pro, Enterprise, and Education).
+> **Tanpa perlu instalasi.** Berkas `it-tools.exe` dikompilasi secara statis tanpa ketergantungan DLL eksternal, runtime `.NET`, maupun dependensi Visual C++ Redistributable. Cukup salin ke folder mana saja atau flashdisk USB dan jalankan langsung di Windows 10 maupun Windows 11 (edisi Home, Pro, Enterprise, dan Education).
 
 ---
 
-## Download from GitHub Releases
+## Unduh dari GitHub Releases
 
-Prebuilt executables are published automatically via GitHub Actions on the repository's **Releases** page:
+Binary siap pakai dipublikasikan secara otomatis melalui GitHub Actions pada halaman **Releases** repositori:
 
-1. Open the **Releases** tab on GitHub.
-2. Choose your release channel:
-   - **Stable** (recommended for production workstations): tagged `vX.Y.Z` and marked as **Latest**.
-   - **Beta / Pre-release** (for UAT & staging testing): tagged `vX.Y.Z-beta.N` and marked as **Pre-release**.
-3. Download one of the release assets:
-   - **`it-tools.exe`** — standalone portable executable ready to run immediately.
-   - **`it-tools-vX.Y.Z-windows-x64.zip`** — portable bundle containing `it-tools.exe`, a default `it-tools.toml` template, and this guide.
-   - **`SHA256SUMS.txt`** — SHA-256 checksums for verifying download integrity.
+1. Buka tab **Releases** di GitHub.
+2. Pilih kanal rilis yang diinginkan:
+   - **Stable** (disarankan untuk workstation produksi): ditandai dengan tag `vX.Y.Z` dan berlabel **Latest**.
+   - **Beta / Pra-rilis** (untuk uji coba staging & UAT): ditandai dengan tag `vX.Y.Z-beta.N` dan berlabel **Pre-release**.
+3. Unduh berkas rilis:
+   - **`it-tools.exe`**: binary mandiri portabel yang siap langsung dijalankan.
+   - **`it-tools-vX.Y.Z-windows-x64.zip`**: arsip portabel berisi `it-tools.exe`, templat konfigurasi `it-tools.toml`, dan panduan ini.
+   - **`SHA256SUMS.txt`**: berkas checksum SHA-256 untuk memverifikasi keaslian dan integritas berkas unduhan.
 
-### Verify File Integrity & Version Properties
+### Verifikasi Integritas Berkas & Properti Versi
 
-Verify the SHA-256 hash in PowerShell after downloading:
+Verifikasi hash SHA-256 menggunakan PowerShell setelah mengunduh:
 
 ```powershell
 Get-FileHash .\it-tools.exe -Algorithm SHA256
-# Compare output against SHA256SUMS.txt from the same release
+# Bandingkan hasilnya dengan nilai di berkas SHA256SUMS.txt dari rilis yang sama
 ```
 
-Check embedded Windows PE **Version Properties** (also visible via **Right-click → Properties → Details**):
+Periksa properti versi PE Windows yang tertanam di binary (dapat juga dilihat lewat **Klik Kanan → Properties → Details**):
 
 ```powershell
 (Get-Item .\it-tools.exe).VersionInfo | Format-List ProductName, ProductVersion, FileVersion, FileDescription, Comments
@@ -37,144 +37,162 @@ Check embedded Windows PE **Version Properties** (also visible via **Right-click
 
 ---
 
-## Features & Capabilities
+## Fitur & Kapabilitas
 
-IT-Tools inspects and configures **13 Windows hardening & provisioning modules**, creates automatic **JSON rollback snapshots** before any system change, and includes a built-in **GitHub Releases updater**.
+IT-Tools memeriksa dan mengonfigurasi **13 modul hardening & provisioning Windows**, membuat **snapshot backup JSON** otomatis sebelum menerapkan perubahan sistem, serta menyertakan **updater GitHub Releases** terintegrasi.
 
-| Category | Module ID | Scope | What It Configures |
+| Kategori | ID Modul | Hak Akses | Deskripsi Konfigurasi |
 |---|---|---|---|
-| **UI & UX** | `visual_effects` | Standard User | Disables window animations & UI transparency for snappy desktop responsiveness |
-| **Privacy** | `diagnostics` | Mixed / Admin | Restricts Windows diagnostic telemetry to Required-only and disables feedback prompts |
-| **Privacy** | `search` | Mixed / Admin | Disables Bing/MSA cloud search, Work/School search, and Search Highlights |
-| **Input** | `typing` | Standard User | Disables autocorrect, spell-highlight, text prediction, typing insights, and touch-keyboard nudges |
-| **Shell** | `taskbar` | Standard User | Configures Taskbar alignment (`left`/`center`), auto-hide, disables Widgets, badges, and flashing |
-| **Power** | `power` | Admin | Activates High Performance plan, disables hibernation, tunes AC/DC CPU min %, disk/display/sleep timeouts, and lid/power buttons |
-| **Security** | `screensaver` | Standard User | Enables `scrnsave.scr` screensaver lock after 5 minutes with logon resume required |
-| **Input** | `accessibility` | Standard User | Preserves classic `PrintScreen` key behavior instead of Snipping Tool intercept |
-| **Browser** | `edge` | Admin | Disables Microsoft Edge startup boost, prelaunch, NTP preload, and enforces SmartScreen PUA blocking |
-| **Recovery** | `system_restore` | Admin | Enables System Restore on `C:` and caps shadow storage at `5GB` |
-| **Account** | `password_policy` | Admin | Enforces password history, max age, min length, complexity, and lockout thresholds via `secedit` (plus opt-in local user provisioning) |
-| **Network** | `defender_firewall` | Admin | Enables Microsoft Defender (with optional headless UI), Windows Firewall profiles, and configurable ICMP echo/router rules |
-| **Startup** | `startup_apps` | Mixed / Admin | Disables non-allowlisted startup apps across `HKCU`, `HKLM`, and Startup folders using `StartupApproved` |
-| **Updates** | `update` | Standard User | Checks GitHub Releases (Stable or Beta), verifies `SHA256SUMS.txt`, and safely swaps `it-tools.exe` in place |
-| **Recovery** | `rollback` | Standard / Admin | Restores previous Windows registry values, power scheme, `secedit` policy, firewall state, and startup entries from `it-tools.backup.*.json` |
+| **UI & UX** | `visual_effects` | Pengguna Standar | Menonaktifkan animasi jendela dan transparansi antarmuka untuk respon desktop yang lebih cepat |
+| **Privasi** | `diagnostics` | Campuran / Admin | Membatasi data diagnostik telemetri Windows ke tingkat minimal (Required) dan menonaktifkan prompt survei umpan balik |
+| **Privasi** | `search` | Campuran / Admin | Menonaktifkan pencarian cloud Bing/MSA, integrasi akun kantor/sekolah (AAD), dan sorotan harian (Search Highlights) |
+| **Input** | `typing` | Pengguna Standar | Menonaktifkan koreksi otomatis, penyorot salah ketik, prediksi teks, wawasan mengetik, dan tombol pintas input suara |
+| **Shell** | `taskbar` | Pengguna Standar | Mengatur perataan taskbar (`left`/`center`), sembunyikan otomatis (auto-hide), serta menonaktifkan Widget, lencana, dan kedipan aplikasi |
+| **Daya** | `power` | Admin | Mengaktifkan skema High Performance, mematikan hibernasi, mengatur batas minimal CPU AC/DC, waktu tunggu layar/disk/tidur, dan tombol daya/tutup layar |
+| **Keamanan** | `screensaver` | Pengguna Standar | Mengaktifkan screensaver pengunci layar `scrnsave.scr` setelah 5 menit dengan kewajiban login ulang saat dilanjutkan |
+| **Input** | `accessibility` | Pengguna Standar | Mempertahankan perilaku klasik tombol `PrintScreen` tanpa pemotongan paksa Snipping Tool |
+| **Browser** | `edge` | Admin | Menonaktifkan fitur startup boost, pra-muat tab baru (NTP), pra-luncur Edge, dan mengaktifkan proteksi pemblokiran PUA |
+| **Pemulihan** | `system_restore` | Admin | Mengaktifkan titik pemulihan sistem (System Restore) pada drive `C:` dan membatasi alokasi ruang shadow storage sebesar `5GB` |
+| **Akun** | `password_policy` | Admin | Menetapkan riwayat sandi, usia maksimal, panjang minimal, kompleksitas, dan ambang batas lockout akun via `secedit` (termasuk opsi pembuatan akun lokal) |
+| **Jaringan** | `defender_firewall` | Admin | Mengaktifkan proteksi antivirus Microsoft Defender (dengan opsi headless UI), profil Windows Firewall, dan aturan ICMP echo/router |
+| **Startup** | `startup_apps` | Campuran / Admin | Menonaktifkan aplikasi startup di luar daftar izin (allowlist) pada `HKCU`, `HKLM`, dan folder Startup menggunakan `StartupApproved` |
+| **Pembaruan** | `update` | Pengguna Standar | Memeriksa GitHub Releases (Stable atau Beta), memverifikasi `SHA256SUMS.txt`, dan menukar binary `it-tools.exe` secara aman di tempat |
+| **Pemulihan** | `rollback` | Standar / Admin | Mengembalikan nilai registry Windows, skema daya, kebijakan `secedit`, status firewall, dan entri startup ke kondisi semula dari `it-tools.backup.*.json` |
 
 ---
 
-## Usage
+## Panduan Penggunaan
 
-### 1. Interactive TUI Mode
+### 1. Mode TUI Interaktif (Terminal UI)
 
-Double-click `it-tools.exe` or run it without arguments in **Windows Terminal** / **Command Prompt** / **PowerShell**:
+Cukup klik ganda berkas `it-tools.exe` atau jalankan tanpa argumen di **Windows Terminal**, **Command Prompt**, atau **PowerShell**:
 
 ```powershell
 .\it-tools.exe
 ```
 
-**Keyboard Shortcuts inside TUI:**
-- `↑` / `↓` (or `j` / `k`) : Browse modules and view live system compliance diffs
-- `Space` : Enable or disable the selected module in the session profile
-- `e` / `Enter` : Edit module parameters (timeouts, allowlists, policies, etc.)
-- `x` : Real-time privilege toggle (switch instantly between **Administrator** and simulated **Standard User** without restarting, or invoke one-click UAC elevation)
-- `m` : Quick toggle Execution Mode between **Live Apply** and **Dry-Run Simulation**
-- `o` : Open **Execution & Subcommand Options** dialog (configure Backup snapshot, Strict mode, Auto-restart explorer, Scope filter, and Privilege switching)
-- `u` : Optional local user target picker (clear password expiration or provision a new local account)
-- `p` : Instant preview **Dry-Run** diff across all enabled modules (zero OS changes)
-- `a` : Apply enabled modules based on active mode, options, and privilege scope
-- `s` : Save customized settings to `it-tools.toml` beside `it-tools.exe`
-- `b` : Open Rollback Picker to restore from any `it-tools.backup.*.json` snapshot
-- `v` : Check for new Stable or Beta releases on GitHub
-- `d` : Open built-in documentation and technical glossary
-- `q` / `Esc` : Quit
+> [!TIP]
+> **Elevasi Administrator Otomatis (Auto-Elevation):** Saat dibuka dalam mode TUI interaktif (klik ganda atau dipanggil tanpa sub-perintah), `it-tools.exe` secara otomatis memicu dialog persetujuan Windows UAC agar langsung berjalan sebagai Administrator. Jika sengaja ingin membuka aplikasi dalam mode pengguna standar tanpa elevasi, tambahkan flag `--no-elevate`:
+> ```powershell
+> .\it-tools.exe --no-elevate
+> ```
+
+#### Indikator Status HUD (Heads-Up Display)
+Bagian atas antarmuka TUI menampilkan status sistem secara langsung:
+- **Lencana Hak Akses**: `[ADMINISTRATOR]` (latar hijau), `[STANDAR (DIBATASI)]` (latar kuning), atau `[PENGGUNA STANDAR]` (latar kuning).
+- **Lencana Mode Eksekusi**: `[MODE: LIVE]` (eksekusi langsung) atau `[MODE: SIMULASI]` (dry-run aman tanpa perubahan OS).
+- **Lencana Opsi Eksekusi**: `[BACKUP: ON/OFF]`, `[STRICT: ON/OFF]`, `[RESTART: ON/OFF]`, `[CAKUPAN: HKCU/HKLM]`, `[TARGET: <user>]`.
+- **Ringkasan Kepatuhan**: Jumlah aturan yang `✔ Sesuai`, `⚠ Berubah`, `🔒 Butuh Admin`, dan `✖ Kendala`.
+
+#### Tombol Pintas Keyboard di Dalam TUI:
+- `↑` / `↓` (atau `j` / `k`) : Menavigasi modul dan melihat rincian perbandingan status sistem saat ini
+- `Spasi` : Mengaktifkan atau menonaktifkan modul terpilih dalam profil sesi aktif
+- `e` / `Enter` : Mengubah parameter konfigurasi modul (waktu tunggu, daftar izin, kebijakan sandi, dll.)
+- `x` : Mengalihkan hak akses secara realtime (berpindah instan antara **Administrator** dan **Pengguna Standar** di memori tanpa perlu restart, atau memicu UAC jika proses non-admin)
+- `m` : Mengalihkan mode eksekusi cepat antara **Penerapan Langsung (Live)** dan **Simulasi (Dry-Run)**
+- `o` : Membuka dialog **Opsi & Sub-Perintah Eksekusi** (mengatur backup, mode ketat, restart explorer otomatis, cakupan filter HKCU/HKLM, dan hak akses)
+- `u` : Memilih akun target lokal opsional (menghapus status PasswordNeverExpires atau membuat akun lokal baru dengan sandi sementara di RAM)
+- `p` : Menjalankan simulasi instan (**Dry-Run**) untuk melihat semua perubahan yang akan terjadi tanpa menyentuh Windows
+- `a` : Menjalankan eksekusi modul aktif berdasarkan mode, opsi, dan hak akses yang dipilih (menampilkan dialog konfirmasi transparan)
+- `s` : Menyimpan konfigurasi aktif ke berkas `it-tools.toml` di samping berkas `it-tools.exe`
+- `r` : Menyegarkan pemeriksaan kepatuhan konfigurasi terhadap kondisi Windows saat ini
+- `b` : Membuka menu pemulihan (**Rollback Picker**) untuk memulihkan sistem dari berkas snapshot `it-tools.backup.*.json`
+- `v` : Memeriksa pembaruan versi (Stable atau Beta) langsung dari GitHub Releases
+- `d` : Membuka dokumentasi interaktif dan glosarium istilah teknis lengkap
+- `q` / `Esc` : Keluar dari aplikasi
 
 > [!TIP]
-> Running from Git Bash (`mintty`) without a Win32 console? Either launch `winpty ./it-tools.exe` for TUI or pass CLI subcommands directly.
+> Menjalankan dari Git Bash (`mintty`) tanpa konsol Win32 murni? Gunakan `winpty ./it-tools.exe` untuk antarmuka TUI, atau panggil sub-perintah CLI secara langsung.
 
-### 2. CLI Commands (Automation & Scripting)
+---
 
-**Read-only compliance check (safe for non-admin inspection):**
+### 2. Perintah CLI (Otomatisasi & Skrip)
+
+IT-Tools menyediakan antarmuka baris perintah yang lengkap untuk provisioning tanpa pengawasan (unattended deployment) dan skrip IT support:
+
+**Pemeriksaan kepatuhan sistem (read-only, aman untuk inspeksi non-admin):**
 ```powershell
 .\it-tools.exe check
 .\it-tools.exe check --json
 .\it-tools.exe check --only power,defender_firewall
 ```
 
-**Preview changes without modifying Windows (`--dry-run`):**
+**Simulasi perubahan tanpa mengubah konfigurasi Windows (`--dry-run`):**
 ```powershell
 .\it-tools.exe apply --dry-run
 .\it-tools.exe apply --dry-run --json
 ```
 
-**Apply hardening rules (creates `it-tools.backup.<timestamp>.json` automatically):**
+**Menerapkan aturan hardening (otomatis membuat snapshot backup JSON terlebih dahulu):**
 ```powershell
-# Interactive confirmation prompt
+# Penerapan interaktif dengan konfirmasi visual
 .\it-tools.exe apply
 
-# Unattended deployment (skips confirmation prompt; run from elevated prompt for HKLM/Admin rules)
+# Penerapan tanpa pengawasan (lewati konfirmasi, jalankan di terminal Administrator untuk aturan HKLM)
 .\it-tools.exe apply --yes
 
-# Apply only specific rules or skip specific rules
+# Terapkan hanya modul tertentu atau lewati modul tertentu
 .\it-tools.exe apply --only visual_effects,typing,taskbar --yes
 .\it-tools.exe apply --skip edge,startup_apps --yes
 
-# Opt-in: create or configure a local account during provisioning (password is never logged)
+# Opsi provisioning: buat atau konfigurasi akun lokal pengguna baru (kata sandi tidak pernah dicatat ke disk atau log)
 .\it-tools.exe apply --yes --create-user StaffUser --prompt-password
 ```
 
-**Rollback from a saved backup snapshot:**
+**Pemulihan sistem dari snapshot backup sebelumnya:**
 ```powershell
 .\it-tools.exe rollback .\it-tools.backup.20261111-120000.json
 .\it-tools.exe rollback .\it-tools.backup.20261111-120000.json --yes
 ```
 
-**Manage portable configuration (`it-tools.toml`):**
+**Mengelola berkas konfigurasi portabel (`it-tools.toml`):**
 ```powershell
-# Generate an editable it-tools.toml beside it-tools.exe
+# Buat templat berkas it-tools.toml standar di samping it-tools.exe
 .\it-tools.exe config init
 
-# Inspect active merged settings (embedded defaults + overrides)
+# Tampilkan konfigurasi aktif gabungan (nilai bawaan tertanam + berkas override)
 .\it-tools.exe config show
 
-# Validate syntax and allowed value ranges in a custom config
+# Validasi sintaks dan batasan rentang nilai konfigurasi kustom
 .\it-tools.exe --config C:\Setup\lab.toml config validate
 ```
 
-**Inspect local Windows accounts:**
+**Memeriksa daftar akun pengguna lokal Windows:**
 ```powershell
 .\it-tools.exe user list
 ```
 
 ---
 
-## Check for Updates & Self-Update
+## Pemeriksaan & Pemasangan Pembaruan Mandiri
 
-`it-tools.exe` can check GitHub Releases and upgrade itself directly over HTTPS using native Windows WinHTTP and SHA-256 verification:
+`it-tools.exe` dapat memeriksa rilis terbaru di GitHub dan memperbarui dirinya sendiri langsung melalui koneksi HTTPS menggunakan Windows WinHTTP bawaan serta verifikasi hash SHA-256:
 
 ```powershell
-# Check for newer Stable release (read-only)
+# Periksa apakah ada rilis Stable yang lebih baru (hanya memeriksa)
 .\it-tools.exe update --check
 
-# Check including Beta pre-releases
+# Periksa rilis termasuk kanal Beta (pra-rilis)
 .\it-tools.exe update --check --beta
 
-# Download, verify SHA-256 against SHA256SUMS.txt, and replace it-tools.exe in place
+# Unduh, verifikasi integritas SHA-256 terhadap SHA256SUMS.txt, dan pasang pembaruan otomatis
 .\it-tools.exe update
 .\it-tools.exe update --yes
 ```
 
 > [!NOTE]
-> Official builds from GitHub Actions automatically embed the repository slug. If you use a custom fork or offline mirror, pass `--repo owner/repo` or configure `[update]` inside `it-tools.toml`. During self-update, the previous binary is safely moved to `it-tools.exe.old` and cleaned up automatically on the next launch.
+> Build resmi dari GitHub Actions menyertakan identitas repositori secara otomatis. Jika Anda menggunakan fork kustom atau cermin lokal, gunakan argumen `--repo owner/repo` atau atur parameter `[update]` di `it-tools.toml`. Selama proses pembaruan mandiri, binary lama dipindahkan dengan aman ke `it-tools.exe.old` dan dibersihkan otomatis pada peluncuran berikutnya.
 
 ---
 
-## Configuration Customization (`it-tools.toml`)
+## Kustomisasi Konfigurasi (`it-tools.toml`)
 
-Configuration loads in this order:
-1. Explicit `--config <PATH>` CLI argument
-2. `it-tools.toml` located in the same folder as `it-tools.exe`
-3. Built-in default profile (if no file is present)
+Konfigurasi dimuat dengan urutan prioritas berikut:
+1. Argumen eksplisit CLI `--config <JALUR>`
+2. Berkas `it-tools.toml` yang berada di folder yang sama dengan `it-tools.exe`
+3. Profil bawaan sistem yang tertanam di dalam aplikasi (bila berkas tidak ditemukan)
 
-Only changed keys need to be placed in `it-tools.toml`; unspecified settings inherit embedded defaults:
+Hanya kunci yang ingin diubah yang perlu dituliskan ke dalam `it-tools.toml`; pengaturan lainnya akan otomatis mewarisi nilai bawaan:
 
 ```toml
 version = 1
@@ -196,17 +214,17 @@ allowlist = ["OpenVPN GUI", "SecurityHealth", "OneDrive"]
 
 ---
 
-## Exit Codes & Operational Notes
+## Kode Keluar (Exit Codes) & Catatan Operasional
 
-| Exit Code | Meaning |
+| Kode Keluar | Arti / Kondisi |
 |---|---|
-| `0` | Success (or all selected modules already compliant / reported cleanly) |
-| `1` | Runtime error, validation failure, or one or more rules failed during live `apply` |
-| `2` | Elevation required — run from an Administrator terminal for `HKLM`/policy rules or use `--only` with Standard User (`HKCU`) rules |
-| `3` | TUI invoked without a Windows Console TTY (e.g., redirected pipe) |
+| `0` | Sukses (atau semua modul yang dipilih sudah sesuai dengan target profil) |
+| `1` | Galat runtime, kegagalan validasi, atau satu atau lebih modul gagal saat proses penerapan langsung |
+| `2` | Butuh elevasi hak akses (jalankan terminal sebagai Administrator untuk modul `HKLM` atau gunakan `--only` untuk modul `HKCU`) |
+| `3` | Antarmuka TUI dipanggil tanpa Windows Console TTY (misalnya melalui pipe atau redirection) |
 
 > [!WARNING]
-> **Windows Behavior Notes:**
-> - **Defender Tamper Protection:** If Tamper Protection is enabled by policy or local security settings, `defender_firewall` reports a non-fatal warning rather than failing the entire provisioning run.
-> - **Modern Standby (S0 Low Power Idle):** Some laptops hide legacy sleep/processor subgroups; `power` skips locked subgroups with a warning and continues configuring remaining settings.
-> - **Microsoft Edge:** Edge settings apply via policy registry keys cleanly, and a warning reminds you to restart running `msedge.exe` instances if Edge is open.
+> **Catatan Perilaku Sistem Windows:**
+> - **Defender Tamper Protection:** Jika proteksi Tamper aktif pada Windows Security, modul `defender_firewall` akan mencatat peringatan non-fatal tanpa membatalkan modul lainnya.
+> - **Modern Standby (S0 Low Power Idle):** Sebagian laptop modern mengunci subgrup daya lawas pada tingkat firmware; modul `power` akan melewati subgrup yang terkunci dengan peringatan dan melanjutkan konfigurasi daya lainnya.
+> - **Microsoft Edge:** Kebijakan Edge diterapkan secara bersih melalui Registry Windows Policy; peringatan akan mengingatkan Anda untuk memuat ulang peramban jika proses `msedge.exe` sedang berjalan aktif.
