@@ -72,16 +72,19 @@ Double-click `it-tools.exe` or run it without arguments in **Windows Terminal** 
 ```
 
 **Keyboard Shortcuts inside TUI:**
-- `↑` / `↓` (or `j` / `k`) — Browse modules and view live system compliance diffs
-- `Space` — Enable or disable the selected module in the session profile
-- `e` / `Enter` — Edit module parameters (timeouts, allowlists, policies, etc.)
-- `u` — Optional local user target picker (clear password expiration or provision a new local account)
-- `p` — Preview **Dry-Run** diff across all enabled modules (zero OS changes)
-- `a` — Apply enabled modules (prompts for confirmation; offers one-click UAC elevation or HKCU-only mode if not Administrator)
-- `s` — Save customized settings to `it-tools.toml` beside `it-tools.exe`
-- `b` — Open Rollback Picker to restore from any `it-tools.backup.*.json` snapshot
-- `v` — Check for new Stable or Beta releases on GitHub
-- `q` / `Esc` — Quit
+- `↑` / `↓` (or `j` / `k`) : Browse modules and view live system compliance diffs
+- `Space` : Enable or disable the selected module in the session profile
+- `e` / `Enter` : Edit module parameters (timeouts, allowlists, policies, etc.)
+- `m` : Quick toggle Execution Mode between **Live Apply** and **Dry-Run Simulation**
+- `o` : Open **Execution & Subcommand Options** dialog (configure Backup snapshot on/off, Strict mode on/off, Auto-restart explorer on/off, and Scope filter)
+- `u` : Optional local user target picker (clear password expiration or provision a new local account)
+- `p` : Instant preview **Dry-Run** diff across all enabled modules (zero OS changes)
+- `a` : Apply enabled modules based on active mode and options (prompts for confirmation; offers one-click UAC elevation or HKCU-only mode if not Administrator)
+- `s` : Save customized settings to `it-tools.toml` beside `it-tools.exe`
+- `b` : Open Rollback Picker to restore from any `it-tools.backup.*.json` snapshot
+- `v` : Check for new Stable or Beta releases on GitHub
+- `d` : Open built-in documentation and technical glossary
+- `q` / `Esc` : Quit
 
 > [!TIP]
 > Running from Git Bash (`mintty`) without a Win32 console? Either launch `winpty ./it-tools.exe` for TUI or pass CLI subcommands directly.
