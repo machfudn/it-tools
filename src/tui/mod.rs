@@ -19,7 +19,7 @@ use crate::update::{
     default_github_repo, perform_update,
 };
 
-const CONTROLS_BAR: &str = "[Spasi] Aktif [e] Ubah [u] Akun [p] Simulasi [a] Terapkan [s] Simpan [b] Pulih [v] Update [d] Dok [q] Keluar";
+const CONTROLS_BAR: &str = "[Spasi] Aktif [e] Ubah [m] Mode [o] Opsi [u] Akun [p] Simulasi [a] Terapkan [s] Simpan [b] Pulih [v] Update [d] Dok [q] Keluar";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationLevel {
@@ -32,6 +32,40 @@ pub enum NotificationLevel {
 pub enum TuiEffect {
     Continue,
     Quit(i32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionMode {
+    Live,
+    DryRun,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionScope {
+    AllEnabled,
+    HkcuOnly,
+    HklmOnly,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExecutionOptions {
+    pub mode: ExecutionMode,
+    pub backup_enabled: bool,
+    pub strict: bool,
+    pub restart_explorer: bool,
+    pub scope: ExecutionScope,
+}
+
+impl Default for ExecutionOptions {
+    fn default() -> Self {
+        Self {
+            mode: ExecutionMode::Live,
+            backup_enabled: true,
+            strict: false,
+            restart_explorer: false,
+            scope: ExecutionScope::AllEnabled,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +85,9 @@ pub enum Modal {
         clear_dont_expire: bool,
         focus: UserPickerFocus,
         typing: bool,
+    },
+    ExecutionOptions {
+        cursor: usize,
     },
     ConfirmApply,
     ElevationPrompt,
@@ -103,6 +140,7 @@ pub struct TuiApp {
     pub modal: Modal,
     pub user_target: Option<UserTargetOptions>,
     pub relaunch_args: Vec<String>,
+    pub exec_options: ExecutionOptions,
 }
 
 impl TuiApp {
@@ -123,11 +161,12 @@ impl TuiApp {
             check_report,
             selected_idx: 0,
             status_banner:
-                "Siap. Pilih modul lalu tekan tombol di Kontrol, atau [d] untuk dokumentasi.".into(),
+                "Siap. Gunakan [m] untuk mode, [o] untuk opsi sub-perintah, [d] untuk bantuan.".into(),
             notification_level: NotificationLevel::Info,
             modal: Modal::None,
             user_target: None,
             relaunch_args,
+            exec_options: ExecutionOptions::default(),
         })
     }
 
@@ -582,6 +621,59 @@ impl TuiApp {
                 }
                 Ok(TuiEffect::Continue)
             }
+            Modal::ExecutionOptions { mut cursor } => {
+                match code {
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('o') => {
+                        self.modal = Modal::None;
+                        self.set_notification(
+                            NotificationLevel::Info,
+                            "Pengaturan opsi eksekusi diperbarui.",
+                        );
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        cursor = cursor.saturating_sub(1);
+                        self.modal = Modal::ExecutionOptions { cursor };
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if cursor + 1 < 5 {
+                            cursor += 1;
+                        }
+                        self.modal = Modal::ExecutionOptions { cursor };
+                    }
+                    KeyCode::Char(' ') | KeyCode::Enter => {
+                        match cursor {
+                            0 => {
+                                self.exec_options.mode = match self.exec_options.mode {
+                                    ExecutionMode::Live => ExecutionMode::DryRun,
+                                    ExecutionMode::DryRun => ExecutionMode::Live,
+                                };
+                            }
+                            1 => {
+                                self.exec_options.backup_enabled = !self.exec_options.backup_enabled;
+                            }
+                            2 => {
+                                self.exec_options.strict = !self.exec_options.strict;
+                            }
+                            3 => {
+                                self.exec_options.restart_explorer = !self.exec_options.restart_explorer;
+                            }
+                            4 => {
+                                self.exec_options.scope = match self.exec_options.scope {
+                                    ExecutionScope::AllEnabled => ExecutionScope::HkcuOnly,
+                                    ExecutionScope::HkcuOnly => ExecutionScope::HklmOnly,
+                                    ExecutionScope::HklmOnly => ExecutionScope::AllEnabled,
+                                };
+                            }
+                            _ => {}
+                        }
+                        self.modal = Modal::ExecutionOptions { cursor };
+                    }
+                    _ => {
+                        self.modal = Modal::ExecutionOptions { cursor };
+                    }
+                }
+                Ok(TuiEffect::Continue)
+            }
             Modal::ConfirmApply => match code {
                 KeyCode::Enter | KeyCode::Char('y') => {
                     self.execute_apply(ops, rules, false)?;
@@ -797,6 +889,23 @@ impl TuiApp {
                     typing: false,
                 };
             }
+            KeyCode::Char('m') | KeyCode::Char('M') => {
+                self.exec_options.mode = match self.exec_options.mode {
+                    ExecutionMode::Live => ExecutionMode::DryRun,
+                    ExecutionMode::DryRun => ExecutionMode::Live,
+                };
+                let mode_desc = match self.exec_options.mode {
+                    ExecutionMode::Live => "PENERAPAN LANGSUNG (LIVE)",
+                    ExecutionMode::DryRun => "SIMULASI (DRY-RUN)",
+                };
+                self.set_notification(
+                    NotificationLevel::Info,
+                    format!("Mode eksekusi dialihkan ke: {mode_desc}."),
+                );
+            }
+            KeyCode::Char('o') | KeyCode::Char('O') => {
+                self.modal = Modal::ExecutionOptions { cursor: 0 };
+            }
             KeyCode::Char('s') => {
                 self.cfg.validate()?;
                 self.cfg.save_toml(&self.config_path)?;
@@ -817,8 +926,25 @@ impl TuiApp {
                 );
             }
             KeyCode::Char('p') => {
+                let only_rules: Vec<String> = match self.exec_options.scope {
+                    ExecutionScope::AllEnabled => Vec::new(),
+                    ExecutionScope::HkcuOnly => rules
+                        .iter()
+                        .filter(|r| !r.requires_admin() && is_rule_enabled(&self.cfg, r.id()))
+                        .map(|r| r.id().to_string())
+                        .collect(),
+                    ExecutionScope::HklmOnly => rules
+                        .iter()
+                        .filter(|r| r.requires_admin() && is_rule_enabled(&self.cfg, r.id()))
+                        .map(|r| r.id().to_string())
+                        .collect(),
+                };
                 let opts = ApplyOptions {
                     dry_run: true,
+                    strict: self.exec_options.strict,
+                    no_backup: true,
+                    restart_explorer: false,
+                    only: only_rules,
                     user_target: self.user_target.clone(),
                     ..Default::default()
                 };
@@ -830,13 +956,27 @@ impl TuiApp {
                 );
             }
             KeyCode::Char('a') => {
-                let needs_admin = rules
-                    .iter()
-                    .any(|r| r.requires_admin() && r.is_enabled(&self.cfg));
-                if needs_admin && !ops.is_admin() {
-                    self.modal = Modal::ElevationPrompt;
-                } else {
+                let is_dry_run = self.exec_options.mode == ExecutionMode::DryRun;
+                if is_dry_run {
                     self.modal = Modal::ConfirmApply;
+                } else {
+                    let needs_admin = rules
+                        .iter()
+                        .filter(|r| match self.exec_options.scope {
+                            ExecutionScope::AllEnabled => is_rule_enabled(&self.cfg, r.id()),
+                            ExecutionScope::HkcuOnly => {
+                                !r.requires_admin() && is_rule_enabled(&self.cfg, r.id())
+                            }
+                            ExecutionScope::HklmOnly => {
+                                r.requires_admin() && is_rule_enabled(&self.cfg, r.id())
+                            }
+                        })
+                        .any(|r| r.requires_admin());
+                    if needs_admin && !ops.is_admin() {
+                        self.modal = Modal::ElevationPrompt;
+                    } else {
+                        self.modal = Modal::ConfirmApply;
+                    }
                 }
             }
             KeyCode::Char('b') => {
@@ -908,7 +1048,7 @@ impl TuiApp {
                     format!(
                         "Status          : {}",
                         if can_install {
-                            "PEMBARUAN TERSEDIA — tekan [u] untuk unduh & pasang sekarang"
+                            "PEMBARUAN TERSEDIA: tekan [u] untuk unduh & pasang sekarang"
                         } else if res.update_available {
                             "PEMBARUAN TERSEDIA (aset .exe belum tersedia pada rilis ini)"
                         } else {
@@ -931,7 +1071,7 @@ impl TuiApp {
                     (
                         NotificationLevel::Info,
                         format!(
-                            "Pembaruan tersedia: v{} ({}) — tekan [u] di modal untuk pasang.",
+                            "Pembaruan tersedia: v{} ({}) (tekan [u] di modal untuk pasang).",
                             res.latest_version, res.channel
                         ),
                     )
@@ -1039,16 +1179,45 @@ impl TuiApp {
         &mut self,
         ops: &dyn SystemOps,
         rules: &[Box<dyn Rule>],
-        dry_run: bool,
+        force_dry_run: bool,
     ) -> Result<()> {
+        let dry_run = force_dry_run || self.exec_options.mode == ExecutionMode::DryRun;
+        let only_rules: Vec<String> = match self.exec_options.scope {
+            ExecutionScope::AllEnabled => Vec::new(),
+            ExecutionScope::HkcuOnly => rules
+                .iter()
+                .filter(|r| !r.requires_admin() && is_rule_enabled(&self.cfg, r.id()))
+                .map(|r| r.id().to_string())
+                .collect(),
+            ExecutionScope::HklmOnly => rules
+                .iter()
+                .filter(|r| r.requires_admin() && is_rule_enabled(&self.cfg, r.id()))
+                .map(|r| r.id().to_string())
+                .collect(),
+        };
+
         let opts = ApplyOptions {
             dry_run,
+            strict: self.exec_options.strict,
+            no_backup: !self.exec_options.backup_enabled,
+            restart_explorer: self.exec_options.restart_explorer,
+            only: only_rules,
             user_target: self.user_target.clone(),
             ..Default::default()
         };
+        let title = if dry_run {
+            "Hasil Simulasi (Dry-Run)"
+        } else {
+            "Hasil Penerapan"
+        };
         let rep = apply_rules(ops, &self.cfg, rules, &opts, &self.exe_dir)?;
-        self.show_run_report("Hasil Penerapan", &rep);
-        self.notify_run_report("Penerapan selesai", &rep);
+        self.show_run_report(title, &rep);
+        let note_prefix = if dry_run {
+            "Simulasi selesai"
+        } else {
+            "Penerapan selesai"
+        };
+        self.notify_run_report(note_prefix, &rep);
         self.refresh_check(ops, rules)?;
         Ok(())
     }
@@ -1145,7 +1314,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
             .constraints([
                 Constraint::Length(9),
                 Constraint::Length(1),
-                Constraint::Length(3),
+                Constraint::Length(4),
                 Constraint::Length(1),
                 Constraint::Length(3),
                 Constraint::Length(1),
@@ -1163,17 +1332,28 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
             );
         frame.render_widget(banner, chunks[0]);
         (chunks[2], chunks[4], chunks[6], chunks[8])
+    } else if area.height < 20 {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(4),
+                Constraint::Length(3),
+                Constraint::Min(5),
+                Constraint::Length(5),
+            ])
+            .split(area);
+        (chunks[0], chunks[1], chunks[2], chunks[3])
     } else {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
+                Constraint::Length(4),
                 Constraint::Length(1),
                 Constraint::Length(3),
                 Constraint::Length(1),
                 Constraint::Min(5),
                 Constraint::Length(1),
-                Constraint::Length(4),
+                Constraint::Length(5),
             ])
             .split(area);
         (chunks[0], chunks[2], chunks[4], chunks[6])
@@ -1181,7 +1361,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
 
     let admin_badge = if app.check_report.is_admin {
         Span::styled(
-            " ADMIN ",
+            " [ADMIN] ",
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Green)
@@ -1189,7 +1369,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
         )
     } else {
         Span::styled(
-            " PENGGUNA STANDAR ",
+            " [PENGGUNA STANDAR] ",
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Yellow)
@@ -1220,7 +1400,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
         }
     }
 
-    let mut header_spans = vec![
+    let line1_spans = vec![
         Span::styled(
             format!(" IT-Tools v{} ", current_display_version()),
             Style::default()
@@ -1229,39 +1409,115 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
         ),
         admin_badge,
         Span::raw(format!("  {}  |  ", app.check_report.os_caption)),
-        Span::styled(
-            format!("✔ {compliant_count} Sesuai"),
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        Span::raw(format!(
+            "Konfigurasi: {}{}",
+            app.config_path.file_name().unwrap_or_default().to_string_lossy(),
+            dirty_mark
+        )),
+    ];
+
+    let mode_badge = match app.exec_options.mode {
+        ExecutionMode::Live => Span::styled(
+            " [MODE: LIVE] ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Green)
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::styled("  ·  ", Style::default().fg(Color::DarkGray)),
+        ExecutionMode::DryRun => Span::styled(
+            " [MODE: SIMULASI] ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+    };
+
+    let backup_badge = if app.exec_options.backup_enabled {
         Span::styled(
-            format!("⚠ {drifted_count} Berubah"),
+            "[BACKUP: ON] ",
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled(
+            "[BACKUP: OFF] ",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )
+    };
+
+    let strict_badge = if app.exec_options.strict {
+        Span::styled(
+            "[STRICT: ON] ",
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled("[STRICT: OFF] ", Style::default().fg(Color::DarkGray))
+    };
+
+    let restart_badge = if app.exec_options.restart_explorer {
+        Span::styled(
+            "[RESTART: ON] ",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled("[RESTART: OFF] ", Style::default().fg(Color::DarkGray))
+    };
+
+    let scope_badge = match app.exec_options.scope {
+        ExecutionScope::AllEnabled => Span::raw(""),
+        ExecutionScope::HkcuOnly => Span::styled(
+            "[CAKUPAN: HKCU] ",
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("  ·  ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            format!("🔒 {needs_admin_count} Butuh Admin"),
+        ExecutionScope::HklmOnly => Span::styled(
+            "[CAKUPAN: HKLM] ",
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         ),
+    };
+
+    let mut line2_spans = vec![
+        mode_badge,
+        Span::raw(" "),
+        backup_badge,
+        strict_badge,
+        restart_badge,
+        scope_badge,
     ];
+
+    if let Some(ut) = &app.user_target {
+        line2_spans.push(Span::styled(
+            format!("[TARGET: {}] ", ut.username),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    line2_spans.push(Span::styled("|  ", Style::default().fg(Color::DarkGray)));
+    line2_spans.push(Span::styled(
+        format!("✔ {compliant_count} Sesuai"),
+        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+    ));
+    line2_spans.push(Span::styled("  ·  ", Style::default().fg(Color::DarkGray)));
+    line2_spans.push(Span::styled(
+        format!("⚠ {drifted_count} Berubah"),
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+    ));
+    line2_spans.push(Span::styled("  ·  ", Style::default().fg(Color::DarkGray)));
+    line2_spans.push(Span::styled(
+        format!("🔒 {needs_admin_count} Butuh Admin"),
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    ));
     if unsupported_count > 0 {
-        header_spans.push(Span::styled("  ·  ", Style::default().fg(Color::DarkGray)));
-        header_spans.push(Span::styled(
+        line2_spans.push(Span::styled("  ·  ", Style::default().fg(Color::DarkGray)));
+        line2_spans.push(Span::styled(
             format!("✖ {unsupported_count} Kendala"),
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ));
     }
-    header_spans.push(Span::styled("  |  ", Style::default().fg(Color::DarkGray)));
-    header_spans.push(Span::raw(format!(
-        "Konfigurasi: {}{}",
-        app.config_path.file_name().unwrap_or_default().to_string_lossy(),
-        dirty_mark
-    )));
 
-    let header = Paragraph::new(Line::from(header_spans)).block(
+    let header = Paragraph::new(vec![Line::from(line1_spans), Line::from(line2_spans)]).block(
         Block::default()
             .borders(Borders::ALL)
-            .title("Sistem & Profil"),
+            .title("Sistem & Profil (HUD Indikator)"),
     );
     frame.render_widget(header, header_area);
 
@@ -1449,7 +1705,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
     let footer_text = if area.width >= 80 {
         format!("{CONTROLS_BAR}  [r] Segarkan")
     } else {
-        CONTROLS_BAR.to_string()
+        "[Spasi] Aktif [e] Ubah [m] Mode [o] Opsi [u] Akun\n[p] Simulasi [a] Terapkan [s] Simpan [b] Pulih\n[v] Update [d] Dok [q] Keluar".to_string()
     };
     let footer = Paragraph::new(footer_text)
         .wrap(Wrap { trim: false })
@@ -1463,14 +1719,228 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
     match &app.modal {
         Modal::None => {}
         Modal::ConfirmApply => {
-            let area = centered_rect(60, 30, frame.area());
+            let area = centered_rect(68, 42, frame.area());
             frame.render_widget(Clear, area);
-            let p = Paragraph::new(
-                "Buat snapshot backup JSON otomatis di sebelah exe lalu terapkan modul yang aktif?\n\n[Enter / y] Terapkan Sekarang    [Esc / n] Batal",
-            )
-            .wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::ALL).title("Konfirmasi Penerapan"));
+            let mode_str = match app.exec_options.mode {
+                ExecutionMode::Live => "PENERAPAN LANGSUNG (LIVE)",
+                ExecutionMode::DryRun => "SIMULASI (DRY-RUN)",
+            };
+            let backup_str = if app.exec_options.backup_enabled {
+                "Aktif (Snapshot JSON dibuat otomatis)"
+            } else {
+                "Nonaktif (Tanpa snapshot backup!)"
+            };
+            let strict_str = if app.exec_options.strict {
+                "Aktif (Hentikan jika ada galat)"
+            } else {
+                "Nonaktif (Lanjutkan modul lain)"
+            };
+            let restart_str = if app.exec_options.restart_explorer {
+                "Aktif (Muat ulang taskbar otomatis)"
+            } else {
+                "Nonaktif"
+            };
+            let scope_str = match app.exec_options.scope {
+                ExecutionScope::AllEnabled => "Semua Modul Aktif",
+                ExecutionScope::HkcuOnly => "Khusus Standar Pengguna (HKCU)",
+                ExecutionScope::HklmOnly => "Khusus Administrator (HKLM)",
+            };
+            let user_str = app
+                .user_target
+                .as_ref()
+                .map(|u| {
+                    format!(
+                        "{} ({})",
+                        u.username,
+                        if u.create_if_missing {
+                            "buat baru"
+                        } else {
+                            "sudah ada"
+                        }
+                    )
+                })
+                .unwrap_or_else(|| "Tidak ada".to_string());
+
+            let lines = vec![
+                Line::from(vec![
+                    Span::styled(
+                        "Konfirmasi Eksekusi Sistem",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::raw("  Mode Eksekusi    : "),
+                    Span::styled(
+                        mode_str,
+                        Style::default()
+                            .fg(if app.exec_options.mode == ExecutionMode::Live {
+                                Color::Green
+                            } else {
+                                Color::Cyan
+                            })
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::raw("  Backup Snapshot  : "),
+                    Span::styled(
+                        backup_str,
+                        Style::default().fg(if app.exec_options.backup_enabled {
+                            Color::Green
+                        } else {
+                            Color::Red
+                        }),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::raw("  Mode Ketat       : "),
+                    Span::styled(
+                        strict_str,
+                        Style::default().fg(if app.exec_options.strict {
+                            Color::Magenta
+                        } else {
+                            Color::DarkGray
+                        }),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::raw("  Restart Explorer : "),
+                    Span::styled(
+                        restart_str,
+                        Style::default().fg(if app.exec_options.restart_explorer {
+                            Color::Cyan
+                        } else {
+                            Color::DarkGray
+                        }),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::raw("  Cakupan Modul    : "),
+                    Span::styled(scope_str, Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::raw("  Target Akun      : "),
+                    Span::styled(user_str, Style::default().fg(Color::White)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(
+                        "[Enter / y] Jalankan Sekarang",
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw("    "),
+                    Span::styled("[Esc / n] Batal", Style::default().fg(Color::White)),
+                ]),
+            ];
+            let p = Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .block(Block::default().borders(Borders::ALL).title("Konfirmasi Eksekusi"));
             frame.render_widget(p, area);
+        }
+        Modal::ExecutionOptions { cursor } => {
+            let area = centered_rect(74, 48, frame.area());
+            frame.render_widget(Clear, area);
+
+            let mode_val = match app.exec_options.mode {
+                ExecutionMode::Live => "Penerapan Langsung (Live)",
+                ExecutionMode::DryRun => "Simulasi (Dry-Run)",
+            };
+            let backup_val = if app.exec_options.backup_enabled {
+                "Aktif (Buat file snapshot JSON sebelum apply)"
+            } else {
+                "Nonaktif (Terapkan langsung tanpa backup)"
+            };
+            let strict_val = if app.exec_options.strict {
+                "Aktif (Hentikan eksekusi jika ada modul yang gagal)"
+            } else {
+                "Nonaktif (Lanjutkan modul lain meskipun ada yang gagal)"
+            };
+            let restart_val = if app.exec_options.restart_explorer {
+                "Aktif (Muat ulang explorer.exe otomatis jika taskbar berubah)"
+            } else {
+                "Nonaktif (Tidak memuat ulang explorer.exe otomatis)"
+            };
+            let scope_val = match app.exec_options.scope {
+                ExecutionScope::AllEnabled => "Semua Modul yang Diaktifkan",
+                ExecutionScope::HkcuOnly => "Khusus Modul Standar Pengguna (HKCU)",
+                ExecutionScope::HklmOnly => "Khusus Modul Administrator Sistem (HKLM)",
+            };
+
+            let items = [
+                format!("1. Mode Eksekusi      : {mode_val}"),
+                format!("2. Backup Snapshot    : {backup_val}"),
+                format!("3. Mode Ketat (Strict): {strict_val}"),
+                format!("4. Restart Explorer   : {restart_val}"),
+                format!("5. Cakupan Penerapan  : {scope_val}"),
+            ];
+
+            let list_items: Vec<ListItem> = items
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    let prefix = if i == *cursor { "> " } else { "  " };
+                    let style = if i == *cursor {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(
+                            prefix,
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(s, style),
+                    ]))
+                })
+                .collect();
+
+            let help_desc = match *cursor {
+                0 => "Pilih apakah aksi eksekusi [a] langsung memodifikasi OS Windows atau hanya simulasi aman.",
+                1 => "Otomatis membuat file backup JSON sebelum mengubah registry/kebijakan Windows untuk proteksi rollback.",
+                2 => "Jika aktif, proses eksekusi akan langsung dibatalkan jika ada satu aturan yang mengalami error.",
+                3 => "Secara otomatis merestart explorer.exe agar perubahan visual taskbar langsung terlihat tanpa relog.",
+                4 => "Filter modul yang dieksekusi: semua modul aktif, hanya modul standar user, atau hanya modul admin.",
+                _ => "",
+            };
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title("Opsi & Sub-Perintah Eksekusi");
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(6),
+                    Constraint::Length(3),
+                    Constraint::Length(1),
+                ])
+                .split(inner);
+
+            let list = List::new(list_items);
+            frame.render_widget(list, chunks[0]);
+
+            let desc_p = Paragraph::new(format!("Keterangan: {help_desc}"))
+                .style(Style::default().fg(Color::Cyan))
+                .wrap(Wrap { trim: false });
+            frame.render_widget(desc_p, chunks[1]);
+
+            let foot_p = Paragraph::new(
+                "[Spasi / Enter] Ubah Nilai    [↑ / ↓] Pindah    [Esc / o] Selesai",
+            )
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center);
+            frame.render_widget(foot_p, chunks[2]);
         }
         Modal::ElevationPrompt => {
             let area = centered_rect(65, 36, frame.area());
@@ -1693,15 +2163,25 @@ fn documentation_lines() -> Vec<String> {
         "  Up/Down atau j/k : Pindah pilihan modul",
         "  Spasi            : Aktif/nonaktifkan modul terpilih",
         "  e atau Enter     : Ubah parameter konfigurasi modul",
+        "  m                : Alihkan Mode Eksekusi (Live vs Simulasi)",
+        "  o                : Buka menu Opsi & Sub-perintah Eksekusi",
         "  u                : Pilih/buat akun lokal target & sandi sementara",
-        "  p                : Simulasi (Dry-Run) tanpa mengubah Windows",
-        "  a                : Terapkan modul aktif (otomatis buat backup JSON)",
+        "  p                : Simulasi instan (Dry-Run) tanpa mengubah Windows",
+        "  a                : Eksekusi modul aktif sesuai mode & opsi",
         "  s                : Simpan konfigurasi ke it-tools.toml",
         "  r                : Segarkan pemeriksaan status kepatuhan OS",
         "  b                : Pulihkan kondisi dari file backup JSON (Rollback)",
         "  v                : Cek & pasang pembaruan versi (Stable/Beta) di GitHub",
         "  d                : Buka dokumentasi & glosarium istilah ini",
         "  q atau Esc       : Keluar dari aplikasi",
+        "",
+        "=== INDIKATOR HUD STATUS & SUB-PERINTAH ===",
+        "  ADMIN / STANDAR  : Hak akses proses (Administrator vs Pengguna Standar).",
+        "  MODE LIVE        : Modul akan langsung mengubah registry/kebijakan OS.",
+        "  MODE SIMULASI    : Hanya simulasi (Dry-Run), nol perubahan ke Windows.",
+        "  BACKUP (ON/OFF)  : Membuat snapshot JSON otomatis sebelum eksekusi.",
+        "  STRICT (ON/OFF)  : Hentikan proses jika ada 1 modul yang mengalami galat.",
+        "  RESTART (ON/OFF) : Muat ulang explorer.exe otomatis jika taskbar berubah.",
         "",
         "=== ARTI STATUS & LENCANA MODUL ===",
         "  SESUAI   (Compliant)  : Pengaturan Windows sudah cocok dengan target profil.",
@@ -3035,5 +3515,122 @@ mod tests {
             }
             other => panic!("expected failed ReportView modal, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn tui_m_key_toggles_execution_mode() {
+        let ops = FakeSystemOps::default();
+        let dir = std::env::temp_dir().join(format!("it-tools-tui-mkey-{}", std::process::id()));
+        let mut app = TuiApp::new(
+            &ops,
+            &[],
+            ProfileConfig::embedded_default(),
+            dir.join("it-tools.toml"),
+            dir,
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(app.exec_options.mode, ExecutionMode::Live);
+        app.handle_key(KeyCode::Char('m'), &ops, &[]).unwrap();
+        assert_eq!(app.exec_options.mode, ExecutionMode::DryRun);
+        assert!(app.status_banner.contains("SIMULASI (DRY-RUN)"));
+
+        app.handle_key(KeyCode::Char('m'), &ops, &[]).unwrap();
+        assert_eq!(app.exec_options.mode, ExecutionMode::Live);
+        assert!(app.status_banner.contains("PENERAPAN LANGSUNG (LIVE)"));
+    }
+
+    #[test]
+    fn tui_o_key_opens_and_controls_execution_options() {
+        let ops = FakeSystemOps::default();
+        let dir = std::env::temp_dir().join(format!("it-tools-tui-okey-{}", std::process::id()));
+        let mut app = TuiApp::new(
+            &ops,
+            &[],
+            ProfileConfig::embedded_default(),
+            dir.join("it-tools.toml"),
+            dir,
+            vec![],
+        )
+        .unwrap();
+
+        app.handle_key(KeyCode::Char('o'), &ops, &[]).unwrap();
+        assert!(matches!(app.modal, Modal::ExecutionOptions { cursor: 0 }));
+
+        // Toggle mode on cursor 0
+        app.handle_key(KeyCode::Char(' '), &ops, &[]).unwrap();
+        assert_eq!(app.exec_options.mode, ExecutionMode::DryRun);
+
+        // Move to cursor 1 (backup) and toggle
+        app.handle_key(KeyCode::Down, &ops, &[]).unwrap();
+        assert!(matches!(app.modal, Modal::ExecutionOptions { cursor: 1 }));
+        app.handle_key(KeyCode::Char(' '), &ops, &[]).unwrap();
+        assert!(!app.exec_options.backup_enabled);
+
+        // Move to cursor 2 (strict) and toggle
+        app.handle_key(KeyCode::Down, &ops, &[]).unwrap();
+        assert!(matches!(app.modal, Modal::ExecutionOptions { cursor: 2 }));
+        app.handle_key(KeyCode::Char(' '), &ops, &[]).unwrap();
+        assert!(app.exec_options.strict);
+
+        // Move to cursor 3 (restart_explorer) and toggle
+        app.handle_key(KeyCode::Down, &ops, &[]).unwrap();
+        assert!(matches!(app.modal, Modal::ExecutionOptions { cursor: 3 }));
+        app.handle_key(KeyCode::Char(' '), &ops, &[]).unwrap();
+        assert!(app.exec_options.restart_explorer);
+
+        // Move to cursor 4 (scope) and cycle
+        app.handle_key(KeyCode::Down, &ops, &[]).unwrap();
+        assert!(matches!(app.modal, Modal::ExecutionOptions { cursor: 4 }));
+        app.handle_key(KeyCode::Char(' '), &ops, &[]).unwrap();
+        assert_eq!(app.exec_options.scope, ExecutionScope::HkcuOnly);
+        app.handle_key(KeyCode::Char(' '), &ops, &[]).unwrap();
+        assert_eq!(app.exec_options.scope, ExecutionScope::HklmOnly);
+
+        // Close modal with Esc
+        app.handle_key(KeyCode::Esc, &ops, &[]).unwrap();
+        assert!(matches!(app.modal, Modal::None));
+        assert!(app.status_banner.contains("diperbarui"));
+    }
+
+    #[test]
+    fn tui_hud_renders_admin_mode_and_subcommand_badges() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let ops = FakeSystemOps::default();
+        ops.state.borrow_mut().admin = true;
+        let dir = std::env::temp_dir().join(format!("it-tools-tui-hud-{}", std::process::id()));
+        let mut app = TuiApp::new(
+            &ops,
+            &[],
+            ProfileConfig::embedded_default(),
+            dir.join("it-tools.toml"),
+            dir,
+            vec![],
+        )
+        .unwrap();
+
+        app.exec_options.mode = ExecutionMode::DryRun;
+        app.exec_options.strict = true;
+
+        let mut term = Terminal::new(TestBackend::new(120, 32)).unwrap();
+        term.draw(|f| draw_ui(f, &app, &[])).unwrap();
+        let buf = term.backend().buffer().clone();
+        let all_text: String = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(all_text.contains("[ADMIN]"));
+        assert!(all_text.contains("[MODE: SIMULASI]"));
+        assert!(all_text.contains("[BACKUP: ON]"));
+        assert!(all_text.contains("[STRICT: ON]"));
+        assert!(all_text.contains("Sistem & Profil (HUD Indikator)"));
     }
 }
