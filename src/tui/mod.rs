@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -13,13 +13,148 @@ use crate::cli::EXIT_NO_CONSOLE;
 use crate::config::{FeedbackFrequency, PowerAction, ProfileConfig, TaskbarAlignment};
 use crate::engine::report::{CheckReport, CheckStatus, RuleCheck, RuleOutcome, RunReport};
 use crate::engine::{ApplyOptions, Rule, UserTargetOptions, apply_rules, check_rules};
-use crate::platform::{LocalUserInfo, SystemOps};
+use crate::platform::{CmdOutput, LocalUserInfo, RegHive, RegValue, SystemOps};
 use crate::update::{
     UpdateChannel, UpdateCheckResult, check_for_update, current_channel, current_display_version,
     default_github_repo, perform_update,
 };
 
-const CONTROLS_BAR: &str = "[Spasi] Aktif [e] Ubah [m] Mode [o] Opsi [u] Akun [p] Simulasi [a] Terapkan [s] Simpan [b] Pulih [v] Update [d] Dok [q] Keluar";
+const CONTROLS_BAR: &str = "[Spasi] Aktif [e] Ubah [x] Hak [m] Mode [o] Opsi [u] Akun [p] Simulasi [a] Terapkan [s] Simpan [b] Pulih [v] Update [d] Dok [q] Keluar";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivePrivilege {
+    Admin,
+    Standard,
+}
+
+pub struct PrivilegeScopedOps<'a> {
+    pub inner: &'a dyn SystemOps,
+    pub simulated_admin: bool,
+}
+
+impl<'a> SystemOps for PrivilegeScopedOps<'a> {
+    fn reg_read(&self, hive: RegHive, path: &str, name: &str) -> Result<Option<RegValue>> {
+        self.inner.reg_read(hive, path, name)
+    }
+
+    fn reg_write(&self, hive: RegHive, path: &str, name: &str, value: RegValue) -> Result<()> {
+        if !self.simulated_admin && hive == RegHive::Hklm {
+            anyhow::bail!("Operasi HKLM ditolak: hak akses dibatasi ke Pengguna Standar");
+        }
+        self.inner.reg_write(hive, path, name, value)
+    }
+
+    fn reg_delete_value(&self, hive: RegHive, path: &str, name: &str) -> Result<()> {
+        if !self.simulated_admin && hive == RegHive::Hklm {
+            anyhow::bail!("Operasi HKLM ditolak: hak akses dibatasi ke Pengguna Standar");
+        }
+        self.inner.reg_delete_value(hive, path, name)
+    }
+
+    fn reg_list_values(&self, hive: RegHive, path: &str) -> Result<Vec<(String, RegValue)>> {
+        self.inner.reg_list_values(hive, path)
+    }
+
+    fn reg_list_subkeys(&self, hive: RegHive, path: &str) -> Result<Vec<String>> {
+        self.inner.reg_list_subkeys(hive, path)
+    }
+
+    fn local_appdata_dir(&self) -> Option<PathBuf> {
+        self.inner.local_appdata_dir()
+    }
+
+    fn startup_folders(&self) -> Vec<(String, PathBuf)> {
+        self.inner.startup_folders()
+    }
+
+    fn read_file_opt(&self, path: &Path) -> Result<Option<Vec<u8>>> {
+        self.inner.read_file_opt(path)
+    }
+
+    fn write_file(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+        self.inner.write_file(path, bytes)
+    }
+
+    fn remove_file_opt(&self, path: &Path) -> Result<()> {
+        self.inner.remove_file_opt(path)
+    }
+
+    fn temp_dir(&self) -> PathBuf {
+        self.inner.temp_dir()
+    }
+
+    fn is_process_running(&self, exe_name: &str) -> bool {
+        self.inner.is_process_running(exe_name)
+    }
+
+    fn is_admin(&self) -> bool {
+        self.simulated_admin
+    }
+
+    fn is_console_tty(&self) -> bool {
+        self.inner.is_console_tty()
+    }
+
+    fn current_username(&self) -> String {
+        self.inner.current_username()
+    }
+
+    fn os_caption(&self) -> String {
+        self.inner.os_caption()
+    }
+
+    fn local_timestamp_compact(&self) -> String {
+        self.inner.local_timestamp_compact()
+    }
+
+    fn local_timestamp_iso(&self) -> String {
+        self.inner.local_timestamp_iso()
+    }
+
+    fn relaunch_as_admin(&self, args: &[String]) -> Result<()> {
+        self.inner.relaunch_as_admin(args)
+    }
+
+    fn list_local_users(&self) -> Result<Vec<LocalUserInfo>> {
+        self.inner.list_local_users()
+    }
+
+    fn create_local_user(&self, name: &str, password: &str) -> Result<()> {
+        self.inner.create_local_user(name, password)
+    }
+
+    fn set_user_dont_expire(&self, name: &str, dont_expire: bool) -> Result<()> {
+        self.inner.set_user_dont_expire(name, dont_expire)
+    }
+
+    fn set_user_password(&self, name: &str, password: &str) -> Result<()> {
+        self.inner.set_user_password(name, password)
+    }
+
+    fn http_get(&self, url: &str, accept: Option<&str>) -> Result<Vec<u8>> {
+        self.inner.http_get(url, accept)
+    }
+
+    fn current_exe_path(&self) -> Result<PathBuf> {
+        self.inner.current_exe_path()
+    }
+
+    fn rename_file(&self, from: &Path, to: &Path) -> Result<()> {
+        self.inner.rename_file(from, to)
+    }
+
+    fn run_tool(&self, program: &str, args: &[&str]) -> Result<CmdOutput> {
+        self.inner.run_tool(program, args)
+    }
+
+    fn broadcast_setting_change(&self) -> Result<()> {
+        self.inner.broadcast_setting_change()
+    }
+
+    fn restart_explorer(&self) -> Result<()> {
+        self.inner.restart_explorer()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationLevel {
@@ -141,6 +276,8 @@ pub struct TuiApp {
     pub user_target: Option<UserTargetOptions>,
     pub relaunch_args: Vec<String>,
     pub exec_options: ExecutionOptions,
+    pub active_privilege: ActivePrivilege,
+    pub os_is_admin: bool,
 }
 
 impl TuiApp {
@@ -152,7 +289,17 @@ impl TuiApp {
         exe_dir: PathBuf,
         relaunch_args: Vec<String>,
     ) -> Result<Self> {
-        let check_report = check_all(ops, &cfg, rules)?;
+        let os_is_admin = ops.is_admin();
+        let active_privilege = if os_is_admin {
+            ActivePrivilege::Admin
+        } else {
+            ActivePrivilege::Standard
+        };
+        let scoped_ops = PrivilegeScopedOps {
+            inner: ops,
+            simulated_admin: active_privilege == ActivePrivilege::Admin,
+        };
+        let check_report = check_all(&scoped_ops, &cfg, rules)?;
         Ok(Self {
             cfg,
             config_path,
@@ -161,12 +308,14 @@ impl TuiApp {
             check_report,
             selected_idx: 0,
             status_banner:
-                "Siap. Gunakan [m] untuk mode, [o] untuk opsi sub-perintah, [d] untuk bantuan.".into(),
+                "Siap. Gunakan [x] untuk hak akses, [m] untuk mode, [o] untuk opsi, [d] untuk bantuan.".into(),
             notification_level: NotificationLevel::Info,
             modal: Modal::None,
             user_target: None,
             relaunch_args,
             exec_options: ExecutionOptions::default(),
+            active_privilege,
+            os_is_admin,
         })
     }
 
@@ -213,7 +362,11 @@ impl TuiApp {
     }
 
     pub fn refresh_check(&mut self, ops: &dyn SystemOps, rules: &[Box<dyn Rule>]) -> Result<()> {
-        self.check_report = check_all(ops, &self.cfg, rules)?;
+        let scoped_ops = PrivilegeScopedOps {
+            inner: ops,
+            simulated_admin: self.active_privilege == ActivePrivilege::Admin,
+        };
+        self.check_report = check_all(&scoped_ops, &self.cfg, rules)?;
         Ok(())
     }
 
@@ -635,7 +788,7 @@ impl TuiApp {
                         self.modal = Modal::ExecutionOptions { cursor };
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
-                        if cursor + 1 < 5 {
+                        if cursor + 1 < 6 {
                             cursor += 1;
                         }
                         self.modal = Modal::ExecutionOptions { cursor };
@@ -664,6 +817,35 @@ impl TuiApp {
                                     ExecutionScope::HklmOnly => ExecutionScope::AllEnabled,
                                 };
                             }
+                            5 => {
+                                if self.os_is_admin {
+                                    self.active_privilege = match self.active_privilege {
+                                        ActivePrivilege::Admin => ActivePrivilege::Standard,
+                                        ActivePrivilege::Standard => ActivePrivilege::Admin,
+                                    };
+                                    self.refresh_check(ops, rules)?;
+                                    match self.active_privilege {
+                                        ActivePrivilege::Admin => {
+                                            self.set_notification(
+                                                NotificationLevel::Success,
+                                                "Hak akses dialihkan ke: ADMINISTRATOR (Realtime, HKLM & HKCU aktif).",
+                                            );
+                                        }
+                                        ActivePrivilege::Standard => {
+                                            self.set_notification(
+                                                NotificationLevel::Warning,
+                                                "Hak akses dibatasi ke: PENGGUNA STANDAR (Realtime, isolasi HKCU, HKLM dikunci).",
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    if self.config_dirty {
+                                        let _ = self.cfg.save_toml(&self.config_path);
+                                    }
+                                    ops.relaunch_as_admin(&self.relaunch_args)?;
+                                    return Ok(TuiEffect::Quit(0));
+                                }
+                            }
                             _ => {}
                         }
                         self.modal = Modal::ExecutionOptions { cursor };
@@ -687,11 +869,22 @@ impl TuiApp {
             },
             Modal::ElevationPrompt => match code {
                 KeyCode::Char('e') | KeyCode::Char('E') | KeyCode::Enter => {
-                    if self.config_dirty {
-                        let _ = self.cfg.save_toml(&self.config_path);
+                    if self.os_is_admin {
+                        self.active_privilege = ActivePrivilege::Admin;
+                        self.refresh_check(ops, rules)?;
+                        self.set_notification(
+                            NotificationLevel::Success,
+                            "Hak akses dipulihkan ke Administrator penuh.",
+                        );
+                        self.modal = Modal::None;
+                        Ok(TuiEffect::Continue)
+                    } else {
+                        if self.config_dirty {
+                            let _ = self.cfg.save_toml(&self.config_path);
+                        }
+                        ops.relaunch_as_admin(&self.relaunch_args)?;
+                        Ok(TuiEffect::Quit(0))
                     }
-                    ops.relaunch_as_admin(&self.relaunch_args)?;
-                    Ok(TuiEffect::Quit(0))
                 }
                 KeyCode::Char('o') | KeyCode::Char('O') => {
                     let hkcu_only: Vec<String> = rules
@@ -704,7 +897,11 @@ impl TuiApp {
                         user_target: None,
                         ..Default::default()
                     };
-                    let report = apply_rules(ops, &self.cfg, rules, &opts, &self.exe_dir)?;
+                    let scoped_ops = PrivilegeScopedOps {
+                        inner: ops,
+                        simulated_admin: self.active_privilege == ActivePrivilege::Admin,
+                    };
+                    let report = apply_rules(&scoped_ops, &self.cfg, rules, &opts, &self.exe_dir)?;
                     self.show_run_report("Terapkan (Khusus HKCU)", &report);
                     self.notify_run_report("Penerapan khusus HKCU selesai", &report);
                     self.refresh_check(ops, rules)?;
@@ -903,6 +1100,39 @@ impl TuiApp {
                     format!("Mode eksekusi dialihkan ke: {mode_desc}."),
                 );
             }
+            KeyCode::Char('x') | KeyCode::Char('X') => {
+                if self.os_is_admin {
+                    self.active_privilege = match self.active_privilege {
+                        ActivePrivilege::Admin => ActivePrivilege::Standard,
+                        ActivePrivilege::Standard => ActivePrivilege::Admin,
+                    };
+                    self.refresh_check(ops, rules)?;
+                    match self.active_privilege {
+                        ActivePrivilege::Admin => {
+                            self.set_notification(
+                                NotificationLevel::Success,
+                                "Hak akses dialihkan ke: ADMINISTRATOR (Realtime, HKLM & HKCU aktif).",
+                            );
+                        }
+                        ActivePrivilege::Standard => {
+                            self.set_notification(
+                                NotificationLevel::Warning,
+                                "Hak akses dibatasi ke: PENGGUNA STANDAR (Realtime, isolasi HKCU, HKLM dikunci).",
+                            );
+                        }
+                    }
+                } else {
+                    if self.config_dirty {
+                        let _ = self.cfg.save_toml(&self.config_path);
+                    }
+                    self.set_notification(
+                        NotificationLevel::Info,
+                        "Meminta elevasi UAC Windows untuk hak Administrator...",
+                    );
+                    ops.relaunch_as_admin(&self.relaunch_args)?;
+                    return Ok(TuiEffect::Quit(0));
+                }
+            }
             KeyCode::Char('o') | KeyCode::Char('O') => {
                 self.modal = Modal::ExecutionOptions { cursor: 0 };
             }
@@ -948,7 +1178,11 @@ impl TuiApp {
                     user_target: self.user_target.clone(),
                     ..Default::default()
                 };
-                let rep = apply_rules(ops, &self.cfg, rules, &opts, &self.exe_dir)?;
+                let scoped_ops = PrivilegeScopedOps {
+                    inner: ops,
+                    simulated_admin: self.active_privilege == ActivePrivilege::Admin,
+                };
+                let rep = apply_rules(&scoped_ops, &self.cfg, rules, &opts, &self.exe_dir)?;
                 self.show_run_report("Pratinjau Perubahan (Simulasi)", &rep);
                 self.set_notification(
                     NotificationLevel::Info,
@@ -972,7 +1206,8 @@ impl TuiApp {
                             }
                         })
                         .any(|r| r.requires_admin());
-                    if needs_admin && !ops.is_admin() {
+                    let is_active_admin = self.active_privilege == ActivePrivilege::Admin;
+                    if needs_admin && !is_active_admin {
                         self.modal = Modal::ElevationPrompt;
                     } else {
                         self.modal = Modal::ConfirmApply;
@@ -1210,7 +1445,11 @@ impl TuiApp {
         } else {
             "Hasil Penerapan"
         };
-        let rep = apply_rules(ops, &self.cfg, rules, &opts, &self.exe_dir)?;
+        let scoped_ops = PrivilegeScopedOps {
+            inner: ops,
+            simulated_admin: self.active_privilege == ActivePrivilege::Admin,
+        };
+        let rep = apply_rules(&scoped_ops, &self.cfg, rules, &opts, &self.exe_dir)?;
         self.show_run_report(title, &rep);
         let note_prefix = if dry_run {
             "Simulasi selesai"
@@ -1359,22 +1598,28 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
         (chunks[0], chunks[2], chunks[4], chunks[6])
     };
 
-    let admin_badge = if app.check_report.is_admin {
-        Span::styled(
-            " [ADMIN] ",
+    let admin_badge = match (app.os_is_admin, app.active_privilege) {
+        (true, ActivePrivilege::Admin) => Span::styled(
+            " [ADMINISTRATOR] ",
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Green)
                 .add_modifier(Modifier::BOLD),
-        )
-    } else {
-        Span::styled(
+        ),
+        (true, ActivePrivilege::Standard) => Span::styled(
+            " [STANDAR (DIBATASI)] ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        (false, _) => Span::styled(
             " [PENGGUNA STANDAR] ",
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
-        )
+        ),
     };
     let dirty_mark = if app.config_dirty {
         " [BELUM DISIMPAN *]"
@@ -1843,7 +2088,7 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
             frame.render_widget(p, area);
         }
         Modal::ExecutionOptions { cursor } => {
-            let area = centered_rect(74, 48, frame.area());
+            let area = centered_rect(76, 56, frame.area());
             frame.render_widget(Clear, area);
 
             let mode_val = match app.exec_options.mode {
@@ -1870,6 +2115,11 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
                 ExecutionScope::HkcuOnly => "Khusus Modul Standar Pengguna (HKCU)",
                 ExecutionScope::HklmOnly => "Khusus Modul Administrator Sistem (HKLM)",
             };
+            let priv_val = match (app.os_is_admin, app.active_privilege) {
+                (true, ActivePrivilege::Admin) => "Administrator (Penuh - HKLM + HKCU)",
+                (true, ActivePrivilege::Standard) => "Pengguna Standar (Dibatasi Simulasi - HKCU saja)",
+                (false, _) => "Pengguna Standar (Tekan Enter untuk Elevasi UAC)",
+            };
 
             let items = [
                 format!("1. Mode Eksekusi      : {mode_val}"),
@@ -1877,6 +2127,7 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
                 format!("3. Mode Ketat (Strict): {strict_val}"),
                 format!("4. Restart Explorer   : {restart_val}"),
                 format!("5. Cakupan Penerapan  : {scope_val}"),
+                format!("6. Hak Akses (Priv)   : {priv_val}"),
             ];
 
             let list_items: Vec<ListItem> = items
@@ -1909,6 +2160,7 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
                 2 => "Jika aktif, proses eksekusi akan langsung dibatalkan jika ada satu aturan yang mengalami error.",
                 3 => "Secara otomatis merestart explorer.exe agar perubahan visual taskbar langsung terlihat tanpa relog.",
                 4 => "Filter modul yang dieksekusi: semua modul aktif, hanya modul standar user, atau hanya modul admin.",
+                5 => "Beralih realtime antara hak Administrator dan Pengguna Standar untuk menguji isolasi HKCU/HKLM.",
                 _ => "",
             };
 
@@ -1921,7 +2173,7 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(6),
+                    Constraint::Length(7),
                     Constraint::Length(3),
                     Constraint::Length(1),
                 ])
@@ -1945,9 +2197,14 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
         Modal::ElevationPrompt => {
             let area = centered_rect(65, 36, frame.area());
             frame.render_widget(Clear, area);
-            let p = Paragraph::new(
-                "Satu atau lebih modul yang dipilih mengubah HKLM / kebijakan Windows dan membutuhkan hak Administrator.\n\n[E] Jalankan Ulang sebagai Administrator (UAC)\n[O] Terapkan Modul Pengguna (HKCU) Saja Sekarang\n[Esc] Batal",
-            )
+            let elevate_hint = if app.os_is_admin {
+                "[E] Kembalikan ke Administrator (Realtime RAM)\n[O] Terapkan Modul Pengguna (HKCU) Saja Sekarang\n[Esc] Batal"
+            } else {
+                "[E] Jalankan Ulang sebagai Administrator (UAC)\n[O] Terapkan Modul Pengguna (HKCU) Saja Sekarang\n[Esc] Batal"
+            };
+            let p = Paragraph::new(format!(
+                "Satu atau lebih modul yang dipilih mengubah HKLM / kebijakan Windows dan membutuhkan hak Administrator.\n\n{elevate_hint}"
+            ))
             .wrap(Wrap { trim: false })
             .block(Block::default().borders(Borders::ALL).title("Butuh Hak Administrator"));
             frame.render_widget(p, area);
@@ -2163,6 +2420,7 @@ fn documentation_lines() -> Vec<String> {
         "  Up/Down atau j/k : Pindah pilihan modul",
         "  Spasi            : Aktif/nonaktifkan modul terpilih",
         "  e atau Enter     : Ubah parameter konfigurasi modul",
+        "  x                : Ubah privilege (Admin <-> Standar) realtime / UAC",
         "  m                : Alihkan Mode Eksekusi (Live vs Simulasi)",
         "  o                : Buka menu Opsi & Sub-perintah Eksekusi",
         "  u                : Pilih/buat akun lokal target & sandi sementara",
@@ -2176,7 +2434,9 @@ fn documentation_lines() -> Vec<String> {
         "  q atau Esc       : Keluar dari aplikasi",
         "",
         "=== INDIKATOR HUD STATUS & SUB-PERINTAH ===",
-        "  ADMIN / STANDAR  : Hak akses proses (Administrator vs Pengguna Standar).",
+        "  ADMINISTRATOR    : Hak Administrator penuh (bisa ubah HKLM & HKCU).",
+        "  STANDAR (DIBATASI): Hak dibatasi simulasi ke Pengguna Standar (HKCU saja).",
+        "  PENGGUNA STANDAR : Proses Pengguna Standar asli (tekan [x] untuk UAC).",
         "  MODE LIVE        : Modul akan langsung mengubah registry/kebijakan OS.",
         "  MODE SIMULASI    : Hanya simulasi (Dry-Run), nol perubahan ke Windows.",
         "  BACKUP (ON/OFF)  : Membuat snapshot JSON otomatis sebelum eksekusi.",
@@ -3627,10 +3887,127 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(all_text.contains("[ADMIN]"));
+        assert!(all_text.contains("[ADMINISTRATOR]"));
         assert!(all_text.contains("[MODE: SIMULASI]"));
         assert!(all_text.contains("[BACKUP: ON]"));
         assert!(all_text.contains("[STRICT: ON]"));
         assert!(all_text.contains("Sistem & Profil (HUD Indikator)"));
+    }
+
+    #[test]
+    fn tui_x_key_toggles_realtime_privilege_when_admin() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let ops = FakeSystemOps::default();
+        ops.state.borrow_mut().admin = true;
+        let dir = std::env::temp_dir().join(format!("it-tools-tui-xkey-{}", std::process::id()));
+        let rules = crate::rules::all_rules();
+        let mut app = TuiApp::new(
+            &ops,
+            &rules,
+            ProfileConfig::embedded_default(),
+            dir.join("it-tools.toml"),
+            dir,
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(app.active_privilege, ActivePrivilege::Admin);
+        assert!(app.os_is_admin);
+
+        let mut term = Terminal::new(TestBackend::new(120, 32)).unwrap();
+        term.draw(|f| draw_ui(f, &app, &rules)).unwrap();
+        let buf1 = term.backend().buffer().clone();
+        let text1: String = (0..buf1.area.height)
+            .map(|y| (0..buf1.area.width).map(|x| buf1[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text1.contains("[ADMINISTRATOR]"));
+
+        // Press 'x' to switch to simulated standard user
+        app.handle_key(KeyCode::Char('x'), &ops, &rules).unwrap();
+        assert_eq!(app.active_privilege, ActivePrivilege::Standard);
+        assert!(app.status_banner.contains("PENGGUNA STANDAR"));
+
+        term.draw(|f| draw_ui(f, &app, &rules)).unwrap();
+        let buf2 = term.backend().buffer().clone();
+        let text2: String = (0..buf2.area.height)
+            .map(|y| (0..buf2.area.width).map(|x| buf2[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text2.contains("[STANDAR (DIBATASI)]"));
+
+        // Press 'x' again to switch back to full administrator
+        app.handle_key(KeyCode::Char('x'), &ops, &rules).unwrap();
+        assert_eq!(app.active_privilege, ActivePrivilege::Admin);
+        assert!(app.status_banner.contains("ADMINISTRATOR"));
+
+        term.draw(|f| draw_ui(f, &app, &rules)).unwrap();
+        let buf3 = term.backend().buffer().clone();
+        let text3: String = (0..buf3.area.height)
+            .map(|y| (0..buf3.area.width).map(|x| buf3[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text3.contains("[ADMINISTRATOR]"));
+    }
+
+    #[test]
+    fn tui_x_key_triggers_uac_when_standard() {
+        let ops = FakeSystemOps::default();
+        ops.state.borrow_mut().admin = false;
+        let dir = std::env::temp_dir().join(format!("it-tools-tui-xstd-{}", std::process::id()));
+        let mut app = TuiApp::new(
+            &ops,
+            &[],
+            ProfileConfig::embedded_default(),
+            dir.join("it-tools.toml"),
+            dir,
+            vec!["--config".into(), "custom.toml".into()],
+        )
+        .unwrap();
+
+        assert_eq!(app.active_privilege, ActivePrivilege::Standard);
+        assert!(!app.os_is_admin);
+
+        let eff = app.handle_key(KeyCode::Char('x'), &ops, &[]).unwrap();
+        assert_eq!(eff, TuiEffect::Quit(0));
+        assert_eq!(ops.state.borrow().relaunched_args.len(), 1);
+    }
+
+    #[test]
+    fn tui_o_menu_item_6_toggles_privilege_or_triggers_uac() {
+        let ops = FakeSystemOps::default();
+        ops.state.borrow_mut().admin = true;
+        let dir = std::env::temp_dir().join(format!("it-tools-tui-opt6-{}", std::process::id()));
+        let mut app = TuiApp::new(
+            &ops,
+            &[],
+            ProfileConfig::embedded_default(),
+            dir.join("it-tools.toml"),
+            dir,
+            vec![],
+        )
+        .unwrap();
+
+        // Open options modal
+        app.handle_key(KeyCode::Char('o'), &ops, &[]).unwrap();
+        assert!(matches!(app.modal, Modal::ExecutionOptions { cursor: 0 }));
+
+        // Navigate to item 5 (index 5 = item 6)
+        for _ in 0..5 {
+            app.handle_key(KeyCode::Down, &ops, &[]).unwrap();
+        }
+        assert!(matches!(app.modal, Modal::ExecutionOptions { cursor: 5 }));
+
+        // Toggle privilege via Enter
+        app.handle_key(KeyCode::Enter, &ops, &[]).unwrap();
+        assert_eq!(app.active_privilege, ActivePrivilege::Standard);
+        assert!(app.status_banner.contains("PENGGUNA STANDAR"));
+
+        // Toggle back via Space
+        app.handle_key(KeyCode::Char(' '), &ops, &[]).unwrap();
+        assert_eq!(app.active_privilege, ActivePrivilege::Admin);
+        assert!(app.status_banner.contains("ADMINISTRATOR"));
     }
 }
