@@ -805,13 +805,15 @@ impl TuiApp {
                                 };
                             }
                             1 => {
-                                self.exec_options.backup_enabled = !self.exec_options.backup_enabled;
+                                self.exec_options.backup_enabled =
+                                    !self.exec_options.backup_enabled;
                             }
                             2 => {
                                 self.exec_options.strict = !self.exec_options.strict;
                             }
                             3 => {
-                                self.exec_options.restart_explorer = !self.exec_options.restart_explorer;
+                                self.exec_options.restart_explorer =
+                                    !self.exec_options.restart_explorer;
                             }
                             4 => {
                                 self.exec_options.scope = match self.exec_options.scope {
@@ -1659,7 +1661,10 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
         Span::raw(format!("  {}  |  ", app.check_report.os_caption)),
         Span::raw(format!(
             "Konfigurasi: {}{}",
-            app.config_path.file_name().unwrap_or_default().to_string_lossy(),
+            app.config_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy(),
             dirty_mark
         )),
     ];
@@ -1684,7 +1689,9 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
     let backup_badge = if app.exec_options.backup_enabled {
         Span::styled(
             "[BACKUP: ON] ",
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
         )
     } else {
         Span::styled(
@@ -1696,7 +1703,9 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
     let strict_badge = if app.exec_options.strict {
         Span::styled(
             "[STRICT: ON] ",
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
         )
     } else {
         Span::styled("[STRICT: OFF] ", Style::default().fg(Color::DarkGray))
@@ -1705,7 +1714,9 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
     let restart_badge = if app.exec_options.restart_explorer {
         Span::styled(
             "[RESTART: ON] ",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )
     } else {
         Span::styled("[RESTART: OFF] ", Style::default().fg(Color::DarkGray))
@@ -1715,11 +1726,15 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
         ExecutionScope::AllEnabled => Span::raw(""),
         ExecutionScope::HkcuOnly => Span::styled(
             "[CAKUPAN: HKCU] ",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         ),
         ExecutionScope::HklmOnly => Span::styled(
             "[CAKUPAN: HKLM] ",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ),
     };
 
@@ -1735,24 +1750,32 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
     if let Some(ut) = &app.user_target {
         line2_spans.push(Span::styled(
             format!("[TARGET: {}] ", ut.username),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         ));
     }
 
     line2_spans.push(Span::styled("|  ", Style::default().fg(Color::DarkGray)));
     line2_spans.push(Span::styled(
         format!("✔ {compliant_count} Sesuai"),
-        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
     ));
     line2_spans.push(Span::styled("  ·  ", Style::default().fg(Color::DarkGray)));
     line2_spans.push(Span::styled(
         format!("⚠ {drifted_count} Berubah"),
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
     ));
     line2_spans.push(Span::styled("  ·  ", Style::default().fg(Color::DarkGray)));
     line2_spans.push(Span::styled(
         format!("🔒 {needs_admin_count} Butuh Admin"),
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
     ));
     if unsupported_count > 0 {
         line2_spans.push(Span::styled("  ·  ", Style::default().fg(Color::DarkGray)));
@@ -1817,7 +1840,12 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
         .map(|r| {
             let enabled = is_rule_enabled(&app.cfg, r.id());
             let mark_span = if enabled {
-                Span::styled("[x] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                Span::styled(
+                    "[x] ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )
             } else {
                 Span::styled("[ ] ", Style::default().fg(Color::DarkGray))
             };
@@ -1825,18 +1853,28 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
                 Span::styled("○ NONAKTIF", Style::default().fg(Color::DarkGray))
             } else if let Some(chk) = app.check_for(r.id()) {
                 match chk.status {
-                    CheckStatus::Compliant => {
-                        Span::styled("✔ SESUAI", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
-                    }
-                    CheckStatus::Drifted => {
-                        Span::styled("⚠ BERUBAH", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
-                    }
-                    CheckStatus::NeedsAdmin => {
-                        Span::styled("🔒 ADMIN", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-                    }
-                    CheckStatus::Unsupported => {
-                        Span::styled("✖ KENDALA", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-                    }
+                    CheckStatus::Compliant => Span::styled(
+                        "✔ SESUAI",
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    CheckStatus::Drifted => Span::styled(
+                        "⚠ BERUBAH",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    CheckStatus::NeedsAdmin => Span::styled(
+                        "🔒 ADMIN",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    CheckStatus::Unsupported => Span::styled(
+                        "✖ KENDALA",
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    ),
                 }
             } else {
                 Span::raw("-")
@@ -1867,20 +1905,49 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
     let mut detail_lines = Vec::new();
     if let Some(r) = rules.get(app.selected_idx) {
         detail_lines.push(Line::from(vec![
-            Span::styled(format!("{} ", r.title()), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("({})", r.id()), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} ", r.title()),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("({})", r.id()),
+                Style::default().fg(Color::DarkGray),
+            ),
         ]));
 
         let scope_span = if r.requires_admin() {
-            Span::styled(" Administrator (HKLM / System) ", Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD))
+            Span::styled(
+                " Administrator (HKLM / System) ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
         } else {
-            Span::styled(" Standar (HKCU) ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD))
+            Span::styled(
+                " Standar (HKCU) ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )
         };
         let is_active = is_rule_enabled(&app.cfg, r.id());
         let active_span = if is_active {
-            Span::styled(" Aktif ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD))
+            Span::styled(
+                " Aktif ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )
         } else {
-            Span::styled(" Nonaktif ", Style::default().fg(Color::White).bg(Color::DarkGray))
+            Span::styled(
+                " Nonaktif ",
+                Style::default().fg(Color::White).bg(Color::DarkGray),
+            )
         };
         detail_lines.push(Line::from(vec![
             Span::raw("Cakupan: "),
@@ -1893,15 +1960,33 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
         if !desc.is_empty() {
             detail_lines.push(Line::from(""));
             detail_lines.push(Line::from(vec![
-                Span::styled("Fungsi: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Fungsi: ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(desc),
             ]));
         }
 
         if let Some(ut) = &app.user_target {
             detail_lines.push(Line::from(vec![
-                Span::styled("Target Akun Opsional: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                Span::raw(format!("{} ({})", ut.username, if ut.create_if_missing { "buat baru" } else { "sudah ada" })),
+                Span::styled(
+                    "Target Akun Opsional: ",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(format!(
+                    "{} ({})",
+                    ut.username,
+                    if ut.create_if_missing {
+                        "buat baru"
+                    } else {
+                        "sudah ada"
+                    }
+                )),
             ]));
         }
 
@@ -1909,13 +1994,29 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
         if let Some(chk) = app.check_for(r.id()) {
             if chk.diffs.is_empty() {
                 detail_lines.push(Line::from(vec![
-                    Span::styled("Status Kepatuhan: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                    Span::styled("✔ Sudah Sesuai Target (Compliant)", Style::default().fg(Color::Green)),
+                    Span::styled(
+                        "Status Kepatuhan: ",
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        "✔ Sudah Sesuai Target (Compliant)",
+                        Style::default().fg(Color::Green),
+                    ),
                 ]));
             } else {
                 detail_lines.push(Line::from(vec![
-                    Span::styled("Perbedaan Saat Ini ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("({} item):", chk.diffs.len()), Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        "Perbedaan Saat Ini ",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("({} item):", chk.diffs.len()),
+                        Style::default().fg(Color::Yellow),
+                    ),
                 ]));
                 for d in &chk.diffs {
                     detail_lines.push(Line::from(vec![
@@ -1926,19 +2027,32 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &TuiApp, rules: &[Box<dyn Rule>]) {
                         Span::raw("      Saat ini : "),
                         Span::styled(&d.current, Style::default().fg(Color::LightRed)),
                         Span::raw("  ->  Target : "),
-                        Span::styled(&d.target, Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            &d.target,
+                            Style::default()
+                                .fg(Color::LightGreen)
+                                .add_modifier(Modifier::BOLD),
+                        ),
                     ]));
                 }
             }
             if let Some(note) = &chk.note {
                 detail_lines.push(Line::from(""));
                 detail_lines.push(Line::from(vec![
-                    Span::styled("Catatan: ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Catatan: ",
+                        Style::default()
+                            .fg(Color::Magenta)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(note),
                 ]));
             }
         } else {
-            detail_lines.push(Line::from(Span::styled("  (modul dinonaktifkan di konfigurasi)", Style::default().fg(Color::DarkGray))));
+            detail_lines.push(Line::from(Span::styled(
+                "  (modul dinonaktifkan di konfigurasi)",
+                Style::default().fg(Color::DarkGray),
+            )));
         }
     }
     let detail = Paragraph::new(detail_lines)
@@ -2010,14 +2124,12 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
                 .unwrap_or_else(|| "Tidak ada".to_string());
 
             let lines = vec![
-                Line::from(vec![
-                    Span::styled(
-                        "Konfirmasi Eksekusi Sistem",
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]),
+                Line::from(vec![Span::styled(
+                    "Konfirmasi Eksekusi Sistem",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )]),
                 Line::from(""),
                 Line::from(vec![
                     Span::raw("  Mode Eksekusi    : "),
@@ -2085,9 +2197,11 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
                     Span::styled("[Esc / n] Batal", Style::default().fg(Color::White)),
                 ]),
             ];
-            let p = Paragraph::new(lines)
-                .wrap(Wrap { trim: false })
-                .block(Block::default().borders(Borders::ALL).title("Konfirmasi Eksekusi"));
+            let p = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Konfirmasi Eksekusi"),
+            );
             frame.render_widget(p, area);
         }
         Modal::ExecutionOptions { cursor } => {
@@ -2120,7 +2234,9 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
             };
             let priv_val = match (app.os_is_admin, app.active_privilege) {
                 (true, ActivePrivilege::Admin) => "Administrator (Penuh - HKLM + HKCU)",
-                (true, ActivePrivilege::Standard) => "Pengguna Standar (Dibatasi Simulasi - HKCU saja)",
+                (true, ActivePrivilege::Standard) => {
+                    "Pengguna Standar (Dibatasi Simulasi - HKCU saja)"
+                }
                 (false, _) => "Pengguna Standar (Tekan Enter untuk Elevasi UAC)",
             };
 
@@ -2158,12 +2274,24 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
                 .collect();
 
             let help_desc = match *cursor {
-                0 => "Pilih apakah aksi eksekusi [a] langsung memodifikasi OS Windows atau hanya simulasi aman.",
-                1 => "Otomatis membuat file backup JSON sebelum mengubah registry/kebijakan Windows untuk proteksi rollback.",
-                2 => "Jika aktif, proses eksekusi akan langsung dibatalkan jika ada satu aturan yang mengalami error.",
-                3 => "Secara otomatis merestart explorer.exe agar perubahan visual taskbar langsung terlihat tanpa relog.",
-                4 => "Filter modul yang dieksekusi: semua modul aktif, hanya modul standar user, atau hanya modul admin.",
-                5 => "Beralih realtime antara hak Administrator dan Pengguna Standar untuk menguji isolasi HKCU/HKLM.",
+                0 => {
+                    "Pilih apakah aksi eksekusi [a] langsung memodifikasi OS Windows atau hanya simulasi aman."
+                }
+                1 => {
+                    "Otomatis membuat file backup JSON sebelum mengubah registry/kebijakan Windows untuk proteksi rollback."
+                }
+                2 => {
+                    "Jika aktif, proses eksekusi akan langsung dibatalkan jika ada satu aturan yang mengalami error."
+                }
+                3 => {
+                    "Secara otomatis merestart explorer.exe agar perubahan visual taskbar langsung terlihat tanpa relog."
+                }
+                4 => {
+                    "Filter modul yang dieksekusi: semua modul aktif, hanya modul standar user, atau hanya modul admin."
+                }
+                5 => {
+                    "Beralih realtime antara hak Administrator dan Pengguna Standar untuk menguji isolasi HKCU/HKLM."
+                }
                 _ => "",
             };
 
@@ -2190,11 +2318,10 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
                 .wrap(Wrap { trim: false });
             frame.render_widget(desc_p, chunks[1]);
 
-            let foot_p = Paragraph::new(
-                "[Spasi / Enter] Ubah Nilai    [↑ / ↓] Pindah    [Esc / o] Selesai",
-            )
-            .style(Style::default().fg(Color::DarkGray))
-            .alignment(Alignment::Center);
+            let foot_p =
+                Paragraph::new("[Spasi / Enter] Ubah Nilai    [↑ / ↓] Pindah    [Esc / o] Selesai")
+                    .style(Style::default().fg(Color::DarkGray))
+                    .alignment(Alignment::Center);
             frame.render_widget(foot_p, chunks[2]);
         }
         Modal::ElevationPrompt => {
@@ -2382,10 +2509,7 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
                             Style::default().fg(Color::LightGreen),
                         ))
                     } else if s.starts_with("  BERUBAH") || s.contains("peringatan") {
-                        Line::from(Span::styled(
-                            s.as_str(),
-                            Style::default().fg(Color::Yellow),
-                        ))
+                        Line::from(Span::styled(s.as_str(), Style::default().fg(Color::Yellow)))
                     } else if s.contains("gagal") || s.starts_with("  GALAT") {
                         Line::from(Span::styled(
                             s.as_str(),
@@ -3923,7 +4047,11 @@ mod tests {
         term.draw(|f| draw_ui(f, &app, &rules)).unwrap();
         let buf1 = term.backend().buffer().clone();
         let text1: String = (0..buf1.area.height)
-            .map(|y| (0..buf1.area.width).map(|x| buf1[(x, y)].symbol()).collect::<String>())
+            .map(|y| {
+                (0..buf1.area.width)
+                    .map(|x| buf1[(x, y)].symbol())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text1.contains("[ADMINISTRATOR]"));
@@ -3936,7 +4064,11 @@ mod tests {
         term.draw(|f| draw_ui(f, &app, &rules)).unwrap();
         let buf2 = term.backend().buffer().clone();
         let text2: String = (0..buf2.area.height)
-            .map(|y| (0..buf2.area.width).map(|x| buf2[(x, y)].symbol()).collect::<String>())
+            .map(|y| {
+                (0..buf2.area.width)
+                    .map(|x| buf2[(x, y)].symbol())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text2.contains("[STANDAR (DIBATASI)]"));
@@ -3949,7 +4081,11 @@ mod tests {
         term.draw(|f| draw_ui(f, &app, &rules)).unwrap();
         let buf3 = term.backend().buffer().clone();
         let text3: String = (0..buf3.area.height)
-            .map(|y| (0..buf3.area.width).map(|x| buf3[(x, y)].symbol()).collect::<String>())
+            .map(|y| {
+                (0..buf3.area.width)
+                    .map(|x| buf3[(x, y)].symbol())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text3.contains("[ADMINISTRATOR]"));
