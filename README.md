@@ -75,11 +75,12 @@ Double-click `it-tools.exe` or run it without arguments in **Windows Terminal** 
 - `↑` / `↓` (or `j` / `k`) : Browse modules and view live system compliance diffs
 - `Space` : Enable or disable the selected module in the session profile
 - `e` / `Enter` : Edit module parameters (timeouts, allowlists, policies, etc.)
+- `x` : Real-time privilege toggle (switch instantly between **Administrator** and simulated **Standard User** without restarting, or invoke one-click UAC elevation)
 - `m` : Quick toggle Execution Mode between **Live Apply** and **Dry-Run Simulation**
-- `o` : Open **Execution & Subcommand Options** dialog (configure Backup snapshot on/off, Strict mode on/off, Auto-restart explorer on/off, and Scope filter)
+- `o` : Open **Execution & Subcommand Options** dialog (configure Backup snapshot, Strict mode, Auto-restart explorer, Scope filter, and Privilege switching)
 - `u` : Optional local user target picker (clear password expiration or provision a new local account)
 - `p` : Instant preview **Dry-Run** diff across all enabled modules (zero OS changes)
-- `a` : Apply enabled modules based on active mode and options (prompts for confirmation; offers one-click UAC elevation or HKCU-only mode if not Administrator)
+- `a` : Apply enabled modules based on active mode, options, and privilege scope
 - `s` : Save customized settings to `it-tools.toml` beside `it-tools.exe`
 - `b` : Open Rollback Picker to restore from any `it-tools.backup.*.json` snapshot
 - `v` : Check for new Stable or Beta releases on GitHub
