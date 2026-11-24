@@ -307,8 +307,11 @@ impl TuiApp {
             config_dirty: false,
             check_report,
             selected_idx: 0,
-            status_banner:
-                "Siap. Gunakan [x] untuk hak akses, [m] untuk mode, [o] untuk opsi, [d] untuk bantuan.".into(),
+            status_banner: if os_is_admin {
+                "Siap. Berjalan sebagai Administrator. Gunakan [x] untuk hak akses, [m] untuk mode, [o] untuk opsi, [d] untuk bantuan.".into()
+            } else {
+                "Siap. Berjalan sebagai Pengguna Standar. Tekan [x] untuk meminta elevasi Administrator kapan saja.".into()
+            },
             notification_level: NotificationLevel::Info,
             modal: Modal::None,
             user_target: None,

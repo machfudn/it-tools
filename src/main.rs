@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use clap::error::ErrorKind;
 
-use it_tools::cli::{EXIT_ERR, parse_args, run_subcommand};
+use it_tools::cli::{EXIT_ERR, maybe_auto_elevate, parse_args, run_subcommand};
 use it_tools::config::ProfileConfig;
 use it_tools::platform::win32::Win32SystemOps;
 use it_tools::rules::all_rules;
@@ -56,17 +56,22 @@ fn run() -> anyhow::Result<i32> {
             )
         }
         None => {
+            let mut relaunch_args = Vec::new();
+            if let Some(cfg_p) = &cli.config {
+                relaunch_args.push("--config".into());
+                relaunch_args.push(cfg_p.to_string_lossy().into_owned());
+            }
+
+            if maybe_auto_elevate(&ops, true, cli.no_elevate, &relaunch_args)? {
+                return Ok(0);
+            }
+
             let (cfg, src) = ProfileConfig::resolve_from_disk(cli.config.as_deref(), &exe_dir)?;
             let config_path = cli
                 .config
                 .clone()
                 .or(src)
                 .unwrap_or_else(|| exe_dir.join("it-tools.toml"));
-            let mut relaunch_args = Vec::new();
-            if let Some(cfg_p) = &cli.config {
-                relaunch_args.push("--config".into());
-                relaunch_args.push(cfg_p.to_string_lossy().into_owned());
-            }
             run_tui(&ops, &rules, cfg, config_path, exe_dir, relaunch_args)
         }
     }

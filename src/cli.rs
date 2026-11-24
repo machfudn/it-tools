@@ -32,6 +32,10 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     pub config: Option<PathBuf>,
 
+    /// Do not automatically elevate to Administrator upon opening TUI
+    #[arg(long, global = true)]
+    pub no_elevate: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -186,6 +190,22 @@ where
 {
     let mut matches = attach_banner_recursive(Cli::command()).try_get_matches_from(args)?;
     Cli::from_arg_matches_mut(&mut matches)
+}
+
+pub fn maybe_auto_elevate(
+    ops: &dyn SystemOps,
+    is_tui: bool,
+    no_elevate: bool,
+    relaunch_args: &[String],
+) -> Result<bool> {
+    if !ops.is_admin() && !no_elevate && is_tui {
+        match ops.relaunch_as_admin(relaunch_args) {
+            Ok(()) => Ok(true),
+            Err(_) => Ok(false),
+        }
+    } else {
+        Ok(false)
+    }
 }
 
 pub fn write_cli_banner(out: &mut dyn Write) -> io::Result<()> {
@@ -1006,5 +1026,60 @@ mod tests {
         let cfg_s = String::from_utf8(out_cfg).unwrap();
         assert!(cfg_s.contains("$$$$$$/ $$$$$$$$/"));
         let _: toml::Value = toml::from_str(&cfg_s).unwrap();
+    }
+
+    #[test]
+    fn cli_no_elevate_flag_parses_cleanly() {
+        let parsed = parse_args(["it-tools", "--no-elevate"]).unwrap();
+        assert!(parsed.no_elevate);
+        assert!(parsed.command.is_none());
+
+        let default_run = parse_args(["it-tools"]).unwrap();
+        assert!(!default_run.no_elevate);
+    }
+
+    #[test]
+    fn maybe_auto_elevate_triggers_when_standard_and_tui() {
+        let ops = FakeSystemOps::default();
+        ops.state.borrow_mut().admin = false;
+        let relaunch_args = vec!["--config".to_string(), "custom.toml".to_string()];
+
+        let did_elevate = maybe_auto_elevate(&ops, true, false, &relaunch_args).unwrap();
+        assert!(did_elevate);
+        assert_eq!(ops.state.borrow().relaunched_args.len(), 1);
+        assert_eq!(
+            ops.state.borrow().relaunched_args[0],
+            vec!["--config".to_string(), "custom.toml".to_string()]
+        );
+    }
+
+    #[test]
+    fn maybe_auto_elevate_skips_when_already_admin() {
+        let ops = FakeSystemOps::default();
+        ops.state.borrow_mut().admin = true;
+
+        let did_elevate = maybe_auto_elevate(&ops, true, false, &[]).unwrap();
+        assert!(!did_elevate);
+        assert_eq!(ops.state.borrow().relaunched_args.len(), 0);
+    }
+
+    #[test]
+    fn maybe_auto_elevate_skips_when_no_elevate_is_set() {
+        let ops = FakeSystemOps::default();
+        ops.state.borrow_mut().admin = false;
+
+        let did_elevate = maybe_auto_elevate(&ops, true, true, &[]).unwrap();
+        assert!(!did_elevate);
+        assert_eq!(ops.state.borrow().relaunched_args.len(), 0);
+    }
+
+    #[test]
+    fn maybe_auto_elevate_skips_when_not_tui() {
+        let ops = FakeSystemOps::default();
+        ops.state.borrow_mut().admin = false;
+
+        let did_elevate = maybe_auto_elevate(&ops, false, false, &[]).unwrap();
+        assert!(!did_elevate);
+        assert_eq!(ops.state.borrow().relaunched_args.len(), 0);
     }
 }
