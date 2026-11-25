@@ -17,7 +17,7 @@ Binary siap pakai dipublikasikan secara otomatis melalui GitHub Actions pada hal
    - **Beta / Pra-rilis** (untuk uji coba staging & UAT): ditandai dengan tag `vX.Y.Z-beta.N` dan berlabel **Pre-release**.
 3. Unduh berkas rilis:
    - **`it-tools.exe`**: binary mandiri portabel yang siap langsung dijalankan.
-   - **`it-tools-vX.Y.Z-windows-x64.zip`**: arsip portabel berisi `it-tools.exe`, templat konfigurasi `it-tools.toml`, dan panduan ini.
+   - **`it-tools-vX.Y.Z-windows-x64.zip`**: arsip portabel berisi `it-tools.exe`, templat konfigurasi `it-tools.toml`, `README.md`, dan `CHANGELOG.md`.
    - **`SHA256SUMS.txt`**: berkas checksum SHA-256 untuk memverifikasi keaslian dan integritas berkas unduhan.
 
 ### Verifikasi Integritas Berkas & Properti Versi
