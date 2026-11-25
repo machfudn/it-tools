@@ -37,16 +37,16 @@ fn all_13_rules_apply_idempotency_and_full_rollback_e2e() {
     );
 
     let rules = all_rules();
-    assert_eq!(rules.len(), 13);
+    assert_eq!(rules.len(), 14);
     let unique_ids: BTreeSet<&str> = rules.iter().map(|r| r.id()).collect();
-    assert_eq!(unique_ids.len(), 13);
+    assert_eq!(unique_ids.len(), 14);
 
     let cfg = ProfileConfig::embedded_default();
     let dir = std::env::temp_dir().join(format!("it-tools-e2e-all-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
 
     let initial_check = check_rules(&ops, &cfg, &rules, &[], &[]).unwrap();
-    assert_eq!(initial_check.checks.len(), 13);
+    assert_eq!(initial_check.checks.len(), 14);
     assert!(
         initial_check
             .checks
@@ -65,13 +65,13 @@ fn all_13_rules_apply_idempotency_and_full_rollback_e2e() {
         &dir,
     )
     .unwrap();
-    assert_eq!(dry_report.entries.len(), 13);
+    assert_eq!(dry_report.entries.len(), 14);
     assert!(dry_report.backup_file.is_none());
     assert!(!dir.exists());
 
     let apply_report = apply_rules(&ops, &cfg, &rules, &ApplyOptions::default(), &dir).unwrap();
     assert_eq!(apply_report.exit_code(), 0);
-    assert_eq!(apply_report.entries.len(), 13);
+    assert_eq!(apply_report.entries.len(), 14);
     assert!(
         apply_report
             .entries
@@ -170,7 +170,7 @@ fn non_admin_cli_allows_pure_hkcu_rules_and_blocks_hklm_rules() {
         "apply",
         "--yes",
         "--only",
-        "visual_effects,typing,taskbar,screensaver,accessibility",
+        "visual_effects,typing,taskbar,screensaver,accessibility,scripts_folder",
         "--json",
     ])
     .unwrap();
