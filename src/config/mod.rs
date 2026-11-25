@@ -37,6 +37,8 @@ pub struct RulesConfig {
     pub password_policy: PasswordPolicyConfig,
     pub defender_firewall: DefenderFirewallConfig,
     pub startup_apps: StartupAppsConfig,
+    #[serde(default)]
+    pub scripts_folder: ScriptsFolderConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -201,6 +203,32 @@ pub struct StartupAppsConfig {
     pub allowlist: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScriptFileSpec {
+    pub name: String,
+    #[serde(default)]
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ScriptsFolderConfig {
+    pub enabled: bool,
+    pub path: String,
+    #[serde(default)]
+    pub scripts: Vec<ScriptFileSpec>,
+}
+
+impl Default for ScriptsFolderConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            path: r"C:\Skrip".to_string(),
+            scripts: Vec::new(),
+        }
+    }
+}
+
 impl ProfileConfig {
     pub fn embedded_default() -> Self {
         toml::from_str(DEFAULT_TOML).expect("embedded defaults.toml must be valid")
@@ -300,6 +328,28 @@ impl ProfileConfig {
                 ),
             }
         }
+        let sf = &self.rules.scripts_folder;
+        let sf_path = sf.path.trim();
+        if sf_path.is_empty() {
+            bail!("rules.scripts_folder.path must not be empty");
+        }
+        if !is_valid_absolute_windows_path(sf_path) {
+            bail!(
+                "rules.scripts_folder.path must be an absolute path like 'C:\\Skrip' (got '{sf_path}')"
+            );
+        }
+        for spec in &sf.scripts {
+            let name = spec.name.trim();
+            if name.is_empty() {
+                bail!("rules.scripts_folder.scripts[].name must not be empty");
+            }
+            if name.contains('\\') || name.contains('/') || name.contains("..") {
+                bail!("invalid script filename '{name}' (path separators are not allowed)");
+            }
+            if !name.to_ascii_lowercase().ends_with(".txt") {
+                bail!("script filename '{name}' must end with .txt");
+            }
+        }
         Ok(())
     }
 }
@@ -342,6 +392,15 @@ fn merge_toml(base: &mut toml::Value, overlay: toml::Value) {
 fn is_valid_drive_spec(drive: &str) -> bool {
     let bytes = drive.as_bytes();
     bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
+fn is_valid_absolute_windows_path(path: &str) -> bool {
+    let b = path.as_bytes();
+    let has_drive = b.len() >= 3
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && (b[2] == b'\\' || b[2] == b'/');
+    has_drive || Path::new(path).is_absolute()
 }
 
 fn is_valid_vss_size(size: &str) -> bool {
@@ -422,5 +481,23 @@ alignment = "center"
         assert_eq!(cfg3.rules.power.display_timeout_ac_min, 25);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scripts_folder_defaults_when_omitted_and_rejects_empty_path() {
+        let legacy_toml = "[rules.power]\nsleep_timeout_dc_min = 15\n";
+        let cfg = ProfileConfig::from_toml_merged(legacy_toml).unwrap();
+        assert!(cfg.rules.scripts_folder.enabled);
+        assert_eq!(cfg.rules.scripts_folder.path, r"C:\Skrip");
+        assert!(cfg.rules.scripts_folder.scripts.is_empty());
+
+        let bad_empty = "[rules.scripts_folder]\npath = \"   \"\n";
+        let err = ProfileConfig::from_toml_merged(bad_empty).unwrap_err();
+        assert!(err.to_string().contains("scripts_folder.path"));
+
+        let bad_ext =
+            "[rules.scripts_folder]\n[[rules.scripts_folder.scripts]]\nname = \"run.bat\"\n";
+        let err_ext = ProfileConfig::from_toml_merged(bad_ext).unwrap_err();
+        assert!(err_ext.to_string().contains(".txt"));
     }
 }

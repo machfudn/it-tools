@@ -99,6 +99,11 @@ allow_icmp_router = true
 enabled = true
 allowlist = ["OpenVPN GUI", "SecurityHealth"]
 
+[rules.scripts_folder]
+enabled = true
+path = 'C:\Skrip'
+scripts = []
+
 [update]
 allow_beta = false
 # repo = "owner/repo"
