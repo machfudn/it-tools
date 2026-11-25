@@ -210,6 +210,7 @@ jobs:
           $zipPath = Join-Path "dist" $zipName
           $zipItems = @("dist\it-tools.exe", "dist\it-tools.toml")
           if (Test-Path "README.md") { $zipItems += "README.md" }
+          if (Test-Path "CHANGELOG.md") { $zipItems += "CHANGELOG.md" }
           Compress-Archive -Path $zipItems -DestinationPath $zipPath -Force
 
           $exeHash = (Get-FileHash -Algorithm SHA256 dist\it-tools.exe).Hash.ToLowerInvariant()
@@ -231,12 +232,12 @@ jobs:
           $ver = "${{ steps.meta.outputs.version }}"
           $tag = "${{ steps.meta.outputs.tag }}"
           $ch = "${{ steps.meta.outputs.channel }}"
-          $chLabel = if ($ch -eq "beta") { "BETA / PRE-RELEASE (UAT Testing)" } else { "STABLE / PRODUCTION RELEASE" }
+          $chLabel = if ($ch -eq "beta") { "BETA / PRA-RILIS (Uji Coba UAT)" } else { "STABIL / RILIS PRODUKSI" }
 
           [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
           $prevTag = (& git for-each-ref --sort=-creatordate --format='%(refname:short)' refs/tags 2>$null | Where-Object { $_ -ne $tag } | Select-Object -First 1)
           $commitLines = ""
-          $prevLabel = "Initial"
+          $prevLabel = "Awal Proyek"
           if ($prevTag) {
             $logOut = (& git log "$prevTag..HEAD" '--pretty=format:- %s (`%h`)' 2>$null | Out-String).Trim()
             if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($logOut)) {
@@ -248,72 +249,82 @@ jobs:
             $commitLines = (& git log -n 20 '--pretty=format:- %s (`%h`)' 2>$null | Out-String).Trim()
           }
           if ([string]::IsNullOrWhiteSpace($commitLines)) {
-            $commitLines = "- Release build $tag"
+            $commitLines = "- Build rilis $tag"
           }
 
           $extraBlock = ""
           if (-not [string]::IsNullOrWhiteSpace($env:EXTRA_SUMMARY)) {
-            $extraBlock = "`n### Release Highlights`n`n$($env:EXTRA_SUMMARY.Trim())`n"
+            $extraBlock = "`n### Sorotan Rilis`n`n$($env:EXTRA_SUMMARY.Trim())`n"
           }
 
           $betaNotice = if ($ch -eq "beta") {
-            "> [!WARNING]`n> This is a **Beta** pre-release intended for UAT and staging validation before Stable promotion.`n"
+            "> [!WARNING]`n> Ini adalah pra-rilis **Beta** untuk validasi UAT dan staging sebelum promosi ke kanal Stabil.`n"
           } else {
-            "> [!NOTE]`n> This is a **Stable** production release verified by automated CI, PE metadata checks, and UAT smoke gates.`n"
+            "> [!NOTE]`n> Ini adalah rilis produksi **Stabil (Latest)** yang telah terverifikasi oleh CI otomatis, pemeriksaan metadata PE, dan pengujian smoke UAT.`n"
           }
 
           $template = @'
-          ## IT-Tools v__VER__ — __CHANNEL_LABEL__
+          ## IT-Tools v__VER__ (__CHANNEL_LABEL__)
 
           __BETA_NOTICE__
           __EXTRA_BLOCK__
-          ### What's Changed Since __PREV_LABEL__
+          ### Perubahan Sejak __PREV_LABEL__
           __COMMITS__
 
-          ### Portable Executable & Included Features
-          Single portable binary (`it-tools.exe`, **__SIZE_BYTES__ bytes**, static MSVC CRT — zero `.NET` or VC++ redistributable required):
+          ### Executable Portabel & Fitur Utama
+          Binary portabel tunggal (`it-tools.exe`, **__SIZE_BYTES__ byte**, static MSVC CRT: tidak membutuhkan `.NET` maupun Visual C++ Redistributable):
 
-          | Category | Module ID | Description |
+          | Kategori | Modul / Fitur | Deskripsi |
           |---|---|---|
-          | UI & UX | `visual_effects` | Disable Windows animations & transparency for responsive desktop performance |
-          | Privacy | `diagnostics` | Restrict diagnostic telemetry to Required-only & disable feedback prompts |
-          | Privacy | `search` | Disable Bing/MSA & Work/School cloud search and Search Highlights |
-          | Input | `typing` | Disable autocorrect, text prediction, typing insights, and touch-keyboard nudges |
-          | Shell | `taskbar` | Configure Taskbar alignment, auto-hide, widgets off, badge & flash reduction |
-          | Power | `power` | Configure High Performance scheme, sleep/display timeouts, CPU min state, lid/power actions |
-          | Security | `screensaver` | Enable 5-minute screensaver lock (`scrnsave.scr`) with logon screen resume |
-          | Input | `accessibility` | Keep PrintScreen classic behavior instead of Snipping Tool intercept |
-          | Browser | `edge` | Disable Edge startup boost, prelaunch, NTP preload, and enable PUA SmartScreen blocking |
-          | Recovery | `system_restore` | Enable System Restore on `C:` and cap shadow storage at configured size (`5GB`) |
-          | Account | `password_policy` | Enforce local password history, length, complexity, and lockout policy via `secedit` (+ opt-in user flags) |
-          | Network | `defender_firewall` | Enable Microsoft Defender & Firewall profiles with configurable ICMP echo/router rules |
-          | Startup | `startup_apps` | Disable non-allowlisted HKCU/HKLM/Startup-folder apps cleanly via `StartupApproved` |
-          | Maintenance | `update` | Built-in GitHub Releases version check & SHA-256 verified self-updater (`it-tools update`) |
-          | Recovery | `backup` / `rollback` | Automatic JSON snapshot before every live apply + one-step `rollback` restoration |
+          | TUI & UX | `auto_elevate` / `--no-elevate` | Elevasi Administrator UAC otomatis saat membuka `it-tools.exe` (lewati dengan `--no-elevate`) |
+          | TUI & UX | `privilege_toggle` (`[x]`) | Pengalihan hak akses realtime antara Administrator dan Pengguna Standar di RAM tanpa restart |
+          | TUI & UX | `exec_options` (`[m]`, `[o]`) | Mode Live/Simulasi, Backup Snapshot, Strict Mode, Restart Explorer, dan filter cakupan `HKCU`/`HKLM` |
+          | TUI & UX | `hud` & `docs` (`[d]`) | Header Status HUD interaktif dengan chip KPI kepatuhan serta dokumentasi dan glosarium Bahasa Indonesia |
+          | UI & UX | `visual_effects` | Menonaktifkan animasi jendela & transparansi antarmuka untuk respon desktop yang gesit |
+          | Privasi | `diagnostics` | Membatasi data diagnostik telemetri Windows ke tingkat minimal (Required) & menonaktifkan prompt umpan balik |
+          | Privasi | `search` | Menonaktifkan pencarian cloud Bing/MSA, akun kantor/sekolah (AAD), dan sorotan pencarian harian |
+          | Input | `typing` | Menonaktifkan koreksi otomatis, sorot salah ketik, prediksi teks, wawasan mengetik, dan input suara |
+          | Shell | `taskbar` | Mengatur perataan taskbar, auto-hide, menonaktifkan Widget, lencana, dan kedipan aplikasi |
+          | Daya | `power` | Mengaktifkan skema High Performance, waktu tunggu layar/tidur/disk, minimal CPU, dan aksi tombol daya |
+          | Keamanan | `screensaver` | Mengaktifkan screensaver pengunci layar 5 menit (`scrnsave.scr`) dengan login ulang |
+          | Input | `accessibility` | Mempertahankan perilaku klasik tombol PrintScreen tanpa pemotongan Snipping Tool |
+          | Browser | `edge` | Menonaktifkan Edge startup boost, prelaunch, NTP preload, serta mengaktifkan blokir PUA SmartScreen |
+          | Pemulihan | `system_restore` | Mengaktifkan System Restore pada drive `C:` dan membatasi ukuran shadow storage (`5GB`) |
+          | Akun | `password_policy` | Menegakkan riwayat, panjang minimal, kompleksitas, masa berlaku, dan lockout sandi via `secedit` |
+          | Jaringan | `defender_firewall` | Mengaktifkan Microsoft Defender & profil Firewall dengan aturan ICMP echo/router yang dapat dikonfigurasi |
+          | Startup | `startup_apps` | Menonaktifkan aplikasi startup non-allowlist pada HKCU/HKLM/Startup folder via `StartupApproved` |
+          | Pemeliharaan | `update` (`[v]`) | Pemeriksaan rilis GitHub & pembaruan mandiri terverifikasi SHA-256 (`it-tools update`) |
+          | Pemulihan | `backup` / `rollback` (`[b]`) | Snapshot JSON otomatis sebelum setiap apply langsung + pemulihan satu langkah via `rollback` |
 
-          ### UAT Verification Summary
-          - [x] **Code Formatting & Lints:** `cargo fmt --check` & `cargo clippy --all-targets -- -D warnings` passed
-          - [x] **Automated Test Suite:** `cargo test` passed (__PASSED_TESTS__ tests, 0 failed)
-          - [x] **Portability & CRT Check:** `x86_64-pc-windows-msvc` static CRT verified (zero `VCRUNTIME140.dll` / `MSVCP140.dll` imports)
-          - [x] **PE Version Properties:** `ProductVersion = __VER__`, `FileVersion = __FILE_VERSION__`, `OriginalFilename = it-tools.exe`
-          - [x] **Non-Mutating CLI Smoke Tests:** `--version`, `config init/validate`, `check --json`, and `apply --dry-run --json` passed
+          ### Ringkasan Verifikasi Otomatis
+          - [x] **Formatting & Linter:** `cargo fmt --check` & `cargo clippy --all-targets -- -D warnings` lulus
+          - [x] **Rangkaian Pengujian Otomatis:** `cargo test` lulus (__PASSED_TESTS__ test, 0 gagal)
+          - [x] **Pemeriksaan Portabilitas & CRT:** `x86_64-pc-windows-msvc` static CRT terverifikasi (nol impor `VCRUNTIME140.dll` / `MSVCP140.dll`)
+          - [x] **Properti Versi PE:** `ProductVersion = __VER__`, `FileVersion = __FILE_VERSION__`, `OriginalFilename = it-tools.exe`
+          - [x] **Uji Smoke CLI Non-Mutasi:** `--version`, `config init/validate`, `check --json`, dan `apply --dry-run --json` lulus
 
-          ### Downloads & SHA-256 Checksums
-          | Artifact | Purpose | SHA-256 |
+          ### Unduhan & Checksum SHA-256
+          | Aset Rilis | Kegunaan | SHA-256 |
           |---|---|---|
-          | `it-tools.exe` | Standalone portable executable (1-click / CLI / self-update target) | `__EXE_SHA__` |
-          | `__ZIP_NAME__` | Portable bundle (`it-tools.exe` + default `it-tools.toml` + `README.md`) | `__ZIP_SHA__` |
-          | `SHA256SUMS.txt` | Verifiable checksum manifest | — |
+          | `it-tools.exe` | Binary portabel mandiri (klik ganda / CLI / target self-update) | `__EXE_SHA__` |
+          | `__ZIP_NAME__` | Paket portabel (`it-tools.exe` + templat `it-tools.toml` + panduan) | `__ZIP_SHA__` |
+          | `SHA256SUMS.txt` | Daftar checksum terverifikasi untuk audit integritas berkas | (Terlampir di aset) |
 
-          ### Quick Start & Self-Update
+          ### Panduan Cepat & Pembaruan Mandiri
           ```powershell
-          # Read-only system audit (no admin required)
+          # Mode TUI interaktif (otomatis meminta izin Administrator UAC)
+          .\it-tools.exe
+
+          # Mode TUI tanpa elevasi otomatis (mode Pengguna Standar)
+          .\it-tools.exe --no-elevate
+
+          # Audit kepatuhan sistem tanpa perubahan (read-only, tanpa perlu admin)
           .\it-tools.exe check
 
-          # Preview changes safely without modifying Windows
+          # Simulasi perubahan aman tanpa memodifikasi Windows
           .\it-tools.exe apply --dry-run
 
-          # Check for updates or upgrade in-place (add --beta to track pre-releases)
+          # Periksa pembaruan atau tingkatkan versi di tempat (tambahkan --beta untuk kanal pra-rilis)
           .\it-tools.exe update --check
           .\it-tools.exe update
           ```
@@ -340,7 +351,7 @@ jobs:
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: IT-Tools ${{ steps.meta.outputs.tag }} (${{ steps.meta.outputs.channel == 'beta' && 'Beta' || 'Stable' }})
+          name: IT-Tools ${{ steps.meta.outputs.tag }} (${{ steps.meta.outputs.channel == 'beta' && 'Beta' || 'Stabil' }})
           prerelease: ${{ steps.meta.outputs.prerelease }}
           body_path: dist/RELEASE_NOTES.md
           files: |
