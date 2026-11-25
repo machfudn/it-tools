@@ -11,7 +11,7 @@ use crate::backup::{BackupSnapshot, rollback_snapshot};
 use crate::config::{ProfileConfig, write_default_template};
 use crate::engine::report::{CheckReport, CheckStatus, RuleOutcome, RunReport};
 use crate::engine::{ApplyOptions, EngineError, Rule, UserTargetOptions, apply_rules, check_rules};
-use crate::platform::{LocalUserInfo, RegHive, SystemOps};
+use crate::platform::{LocalUserInfo, SystemOps};
 use crate::update::{
     UpdateChannel, check_for_update, current_channel, current_display_version, default_github_repo,
     perform_update,
@@ -537,16 +537,7 @@ fn run_update_cmd(
 }
 
 pub fn snapshot_requires_admin(snap: &BackupSnapshot) -> bool {
-    snap.registry.iter().any(|r| r.hive != RegHive::Hkcu)
-        || snap
-            .startup_approved
-            .iter()
-            .any(|r| r.hive != RegHive::Hkcu)
-        || snap.power.is_some()
-        || snap.secedit_inf.is_some()
-        || snap.firewall.is_some()
-        || snap.system_restore.is_some()
-        || !snap.user_flags.is_empty()
+    snap.requires_admin()
 }
 
 pub fn format_check_table(report: &CheckReport) -> String {
@@ -919,6 +910,9 @@ mod tests {
             true
         }
         fn is_enabled(&self, _cfg: &ProfileConfig) -> bool {
+            true
+        }
+        fn handles_user_target(&self) -> bool {
             true
         }
         fn check(
