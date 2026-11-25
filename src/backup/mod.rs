@@ -108,6 +108,19 @@ impl BackupSnapshot {
             && self.edge_local_state.is_none()
     }
 
+    pub fn requires_admin(&self) -> bool {
+        self.registry.iter().any(|r| r.hive != RegHive::Hkcu)
+            || self
+                .startup_approved
+                .iter()
+                .any(|r| r.hive != RegHive::Hkcu)
+            || self.power.is_some()
+            || self.secedit_inf.is_some()
+            || self.firewall.is_some()
+            || self.system_restore.is_some()
+            || !self.user_flags.is_empty()
+    }
+
     pub fn record_reg_once(
         &mut self,
         ops: &dyn SystemOps,
@@ -237,7 +250,32 @@ pub fn list_backup_files(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+fn run_rollback_cmd(
+    ops: &dyn SystemOps,
+    program: &str,
+    args: &[&str],
+    label: &str,
+    warnings: &mut Vec<String>,
+) {
+    match ops.run_tool(program, args) {
+        Ok(out) if out.exit_code == 0 => {}
+        Ok(out) => {
+            let detail = if !out.stderr.trim().is_empty() {
+                out.stderr.trim()
+            } else {
+                out.stdout.trim()
+            };
+            warnings.push(format!("{label} (exit {}): {detail}", out.exit_code));
+        }
+        Err(err) => warnings.push(format!("{label}: {err}")),
+    }
+}
+
 pub fn rollback_snapshot(ops: &dyn SystemOps, snap: &BackupSnapshot) -> Result<Vec<String>> {
+    if snap.requires_admin() && !ops.is_admin() {
+        anyhow::bail!("Hak Administrator diperlukan untuk memulihkan snapshot ini.");
+    }
+
     let mut actions = Vec::new();
 
     for entry in snap.registry.iter().rev() {
@@ -254,10 +292,12 @@ pub fn rollback_snapshot(ops: &dyn SystemOps, snap: &BackupSnapshot) -> Result<V
     }
 
     if let Some(power) = &snap.power {
+        let mut pw_warns = Vec::new();
         for pv in &power.prior_values {
             let ac = pv.ac.to_string();
             let dc = pv.dc.to_string();
-            let _ = ops.run_tool(
+            run_rollback_cmd(
+                ops,
                 "powercfg",
                 &[
                     "/setacvalueindex",
@@ -266,8 +306,11 @@ pub fn rollback_snapshot(ops: &dyn SystemOps, snap: &BackupSnapshot) -> Result<V
                     &pv.setting,
                     &ac,
                 ],
+                "powercfg /setacvalueindex",
+                &mut pw_warns,
             );
-            let _ = ops.run_tool(
+            run_rollback_cmd(
+                ops,
                 "powercfg",
                 &[
                     "/setdcvalueindex",
@@ -276,24 +319,57 @@ pub fn rollback_snapshot(ops: &dyn SystemOps, snap: &BackupSnapshot) -> Result<V
                     &pv.setting,
                     &dc,
                 ],
+                "powercfg /setdcvalueindex",
+                &mut pw_warns,
             );
         }
-        let _ = ops.run_tool("powercfg", &["/setactive", &power.prior_active_guid]);
+        run_rollback_cmd(
+            ops,
+            "powercfg",
+            &["/setactive", &power.prior_active_guid],
+            "powercfg /setactive",
+            &mut pw_warns,
+        );
         if let Some(created) = &power.created_scheme_guid {
-            let _ = ops.run_tool("powercfg", &["/delete", created]);
+            run_rollback_cmd(
+                ops,
+                "powercfg",
+                &["/delete", created],
+                "powercfg /delete",
+                &mut pw_warns,
+            );
         }
         let h_flag = if power.prior_hibernate_enabled {
             "on"
         } else {
             "off"
         };
-        let _ = ops.run_tool("powercfg", &["/h", h_flag]);
-        actions.push(format!("restored power scheme {}", power.prior_active_guid));
+        run_rollback_cmd(
+            ops,
+            "powercfg",
+            &["/h", h_flag],
+            "powercfg /h",
+            &mut pw_warns,
+        );
+        let warn_note = if pw_warns.is_empty() {
+            String::new()
+        } else {
+            format!(" (peringatan: {})", pw_warns.join("; "))
+        };
+        actions.push(format!(
+            "restored power scheme {}{warn_note}",
+            power.prior_active_guid
+        ));
     }
 
     if let Some(inf) = &snap.secedit_inf {
-        let tmp_inf = ops.temp_dir().join("it-tools-rollback-sec.inf");
-        let tmp_sdb = ops.temp_dir().join("it-tools-rollback-sec.sdb");
+        let pid = std::process::id();
+        let tmp_inf = ops
+            .temp_dir()
+            .join(format!("it-tools-rollback-sec-{pid}.inf"));
+        let tmp_sdb = ops
+            .temp_dir()
+            .join(format!("it-tools-rollback-sec-{pid}.sdb"));
         let mut utf16 = Vec::with_capacity(2 + inf.len() * 2);
         utf16.push(0xFF);
         utf16.push(0xFE);
@@ -325,11 +401,15 @@ pub fn rollback_snapshot(ops: &dyn SystemOps, snap: &BackupSnapshot) -> Result<V
     }
 
     if let Some(fw) = &snap.firewall {
+        let mut fw_warns = Vec::new();
         for rule in &fw.created_rules {
             let arg = format!("name={rule}");
-            let _ = ops.run_tool(
+            run_rollback_cmd(
+                ops,
                 "netsh",
                 &["advfirewall", "firewall", "delete", "rule", &arg],
+                "netsh delete rule",
+                &mut fw_warns,
             );
         }
         for (prof, enabled) in &fw.prior_profiles {
@@ -340,28 +420,56 @@ pub fn rollback_snapshot(ops: &dyn SystemOps, snap: &BackupSnapshot) -> Result<V
                 other => other,
             };
             let state = if *enabled { "on" } else { "off" };
-            let _ = ops.run_tool("netsh", &["advfirewall", "set", prof_arg, "state", state]);
+            run_rollback_cmd(
+                ops,
+                "netsh",
+                &["advfirewall", "set", prof_arg, "state", state],
+                "netsh set profile",
+                &mut fw_warns,
+            );
         }
-        actions.push("restored Windows Defender Firewall state & removed IT-Tools rules".into());
+        let warn_note = if fw_warns.is_empty() {
+            String::new()
+        } else {
+            format!(" (peringatan: {})", fw_warns.join("; "))
+        };
+        actions.push(format!(
+            "restored Windows Defender Firewall state & removed IT-Tools rules{warn_note}"
+        ));
     }
 
     if let Some(sr) = &snap.system_restore {
+        let mut sr_warns = Vec::new();
         if !sr.prior_enabled {
             let cmd = format!("Disable-ComputerRestore -Drive '{}\\'", sr.drive);
-            let _ = ops.run_tool(
+            run_rollback_cmd(
+                ops,
                 "powershell.exe",
                 &["-NoProfile", "-NonInteractive", "-Command", &cmd],
+                "Disable-ComputerRestore",
+                &mut sr_warns,
             );
         } else if let Some(max) = &sr.prior_max_size {
             let for_arg = format!("/for={}", sr.drive);
             let on_arg = format!("/on={}", sr.drive);
             let max_arg = format!("/maxsize={max}");
-            let _ = ops.run_tool(
+            run_rollback_cmd(
+                ops,
                 "vssadmin",
                 &["resize", "shadowstorage", &for_arg, &on_arg, &max_arg],
+                "vssadmin resize shadowstorage",
+                &mut sr_warns,
             );
         }
-        actions.push(format!("restored System Restore on {}", sr.drive));
+        let warn_note = if sr_warns.is_empty() {
+            String::new()
+        } else {
+            format!(" (peringatan: {})", sr_warns.join("; "))
+        };
+        actions.push(format!(
+            "restored System Restore on {}{warn_note}",
+            sr.drive
+        ));
     }
 
     if let Some(edge) = &snap.edge_local_state
