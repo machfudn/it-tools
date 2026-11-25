@@ -10,8 +10,12 @@ use crate::{APP_BANNER, APP_BANNER_WIDTH};
 use crate::backup::{BackupSnapshot, rollback_snapshot};
 use crate::config::{ProfileConfig, write_default_template};
 use crate::engine::report::{CheckReport, CheckStatus, RuleOutcome, RunReport};
-use crate::engine::{ApplyOptions, EngineError, Rule, UserTargetOptions, apply_rules, check_rules};
+use crate::engine::{
+    ApplyOptions, EngineError, Rule, ScriptConflictPolicy, UserTargetOptions, apply_rules,
+    check_rules,
+};
 use crate::platform::{LocalUserInfo, SystemOps};
+use crate::rules::scripts_folder::inspect_scripts_folder;
 use crate::update::{
     UpdateChannel, check_for_update, current_channel, current_display_version, default_github_repo,
     perform_update,
@@ -97,6 +101,12 @@ pub struct ApplyArgs {
     /// Restart explorer.exe automatically when taskbar settings change
     #[arg(long)]
     pub restart_explorer: bool,
+    /// Overwrite existing .txt script files in scripts_folder if content differs
+    #[arg(long, conflicts_with = "skip_existing_scripts")]
+    pub overwrite_scripts: bool,
+    /// Keep existing .txt script files in scripts_folder without prompting
+    #[arg(long, conflicts_with = "overwrite_scripts")]
+    pub skip_existing_scripts: bool,
     /// Existing local user account to configure (opt-in)
     #[arg(long, conflicts_with = "create_user")]
     pub target_user: Option<String>,
@@ -302,6 +312,49 @@ pub fn run_subcommand(
                 }
             }
 
+            let scripts_folder_selected = cfg.rules.scripts_folder.enabled
+                && rules.iter().any(|r| r.id() == "scripts_folder")
+                && (args.only.is_empty() || args.only.iter().any(|o| o == "scripts_folder"))
+                && !args.skip.iter().any(|s| s == "scripts_folder");
+
+            let script_conflict = if args.overwrite_scripts {
+                ScriptConflictPolicy::Overwrite
+            } else if args.skip_existing_scripts {
+                ScriptConflictPolicy::Skip
+            } else if !args.dry_run && scripts_folder_selected {
+                let insp = inspect_scripts_folder(ops, &cfg)?;
+                if !insp.conflicting_scripts.is_empty() {
+                    if ops.is_console_tty() {
+                        writeln!(
+                            err,
+                            "Folder {} sudah ada. Berkas .txt berikut sudah eksis dan berbeda isi: {}",
+                            insp.target_path,
+                            insp.conflicting_scripts.join(", ")
+                        )?;
+                        if confirm_prompt(
+                            "Timpa/rewrite berkas .txt yang sudah ada dengan versi baru? [y/N]: ",
+                            err,
+                        )? {
+                            ScriptConflictPolicy::Overwrite
+                        } else {
+                            ScriptConflictPolicy::Skip
+                        }
+                    } else {
+                        writeln!(
+                            err,
+                            "Info: Berkas .txt sudah ada di {} ({}) dan dipertahankan (gunakan --overwrite-scripts untuk menimpa).",
+                            insp.target_path,
+                            insp.conflicting_scripts.join(", ")
+                        )?;
+                        ScriptConflictPolicy::Skip
+                    }
+                } else {
+                    ScriptConflictPolicy::Skip
+                }
+            } else {
+                ScriptConflictPolicy::Skip
+            };
+
             let opts = ApplyOptions {
                 dry_run: args.dry_run,
                 strict: args.strict,
@@ -310,6 +363,7 @@ pub fn run_subcommand(
                 only: args.only,
                 skip: args.skip,
                 user_target,
+                script_conflict,
             };
 
             match apply_rules(ops, &cfg, rules, &opts, exe_dir) {
@@ -1075,5 +1129,83 @@ mod tests {
         let did_elevate = maybe_auto_elevate(&ops, false, false, &[]).unwrap();
         assert!(!did_elevate);
         assert_eq!(ops.state.borrow().relaunched_args.len(), 0);
+    }
+
+    #[test]
+    fn cli_apply_with_existing_script_respects_skip_and_overwrite_flags() {
+        let ops = FakeSystemOps::default();
+        ops.state.borrow_mut().console_tty = false;
+        ops.create_dir_all(Path::new(r"C:\Skrip")).unwrap();
+        ops.seed_file(Path::new(r"C:\Skrip\demo.txt"), b"lama");
+
+        let dir = std::env::temp_dir().join(format!("it-tools-cli-sf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("it-tools.toml"),
+            "[rules.scripts_folder]\nenabled = true\npath = 'C:\\Skrip'\n[[rules.scripts_folder.scripts]]\nname = \"demo.txt\"\ncontent = \"baru\"\n",
+        )
+        .unwrap();
+
+        let rules = crate::rules::all_rules();
+
+        let cli_skip = parse_args([
+            "it-tools",
+            "apply",
+            "--yes",
+            "--only",
+            "scripts_folder",
+            "--skip-existing-scripts",
+        ])
+        .unwrap();
+        let mut out1 = Vec::new();
+        let mut err1 = Vec::new();
+        let code1 = run_subcommand(
+            cli_skip.command.unwrap(),
+            None,
+            &ops,
+            &rules,
+            &dir,
+            &mut out1,
+            &mut err1,
+        )
+        .unwrap();
+        assert_eq!(code1, EXIT_OK);
+        assert_eq!(
+            ops.read_file_opt(Path::new(r"C:\Skrip\demo.txt"))
+                .unwrap()
+                .unwrap(),
+            b"lama"
+        );
+
+        let cli_ow = parse_args([
+            "it-tools",
+            "apply",
+            "--yes",
+            "--only",
+            "scripts_folder",
+            "--overwrite-scripts",
+        ])
+        .unwrap();
+        let mut out2 = Vec::new();
+        let mut err2 = Vec::new();
+        let code2 = run_subcommand(
+            cli_ow.command.unwrap(),
+            None,
+            &ops,
+            &rules,
+            &dir,
+            &mut out2,
+            &mut err2,
+        )
+        .unwrap();
+        assert_eq!(code2, EXIT_OK);
+        assert_eq!(
+            ops.read_file_opt(Path::new(r"C:\Skrip\demo.txt"))
+                .unwrap()
+                .unwrap(),
+            b"baru"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
