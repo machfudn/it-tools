@@ -12,8 +12,11 @@ use crate::backup::{BackupSnapshot, list_backup_files, rollback_snapshot};
 use crate::cli::EXIT_NO_CONSOLE;
 use crate::config::{FeedbackFrequency, PowerAction, ProfileConfig, TaskbarAlignment};
 use crate::engine::report::{CheckReport, CheckStatus, RuleCheck, RuleOutcome, RunReport};
-use crate::engine::{ApplyOptions, Rule, UserTargetOptions, apply_rules, check_rules};
+use crate::engine::{
+    ApplyOptions, Rule, ScriptConflictPolicy, UserTargetOptions, apply_rules, check_rules,
+};
 use crate::platform::{CmdOutput, LocalUserInfo, RegHive, RegValue, SystemOps};
+use crate::rules::scripts_folder::inspect_scripts_folder;
 use crate::update::{
     UpdateChannel, UpdateCheckResult, check_for_update, current_channel, current_display_version,
     default_github_repo, perform_update,
@@ -69,6 +72,18 @@ impl<'a> SystemOps for PrivilegeScopedOps<'a> {
 
     fn list_dir_files(&self, dir: &Path) -> Result<Vec<String>> {
         self.inner.list_dir_files(dir)
+    }
+
+    fn dir_exists(&self, path: &Path) -> Result<bool> {
+        self.inner.dir_exists(path)
+    }
+
+    fn create_dir_all(&self, path: &Path) -> Result<()> {
+        self.inner.create_dir_all(path)
+    }
+
+    fn remove_empty_dir(&self, path: &Path) -> Result<bool> {
+        self.inner.remove_empty_dir(path)
     }
 
     fn read_file_opt(&self, path: &Path) -> Result<Option<Vec<u8>>> {
@@ -229,6 +244,12 @@ pub enum Modal {
         cursor: usize,
     },
     ConfirmApply,
+    ScriptConflictPrompt {
+        folder_path: String,
+        existing_txt_files: Vec<String>,
+        conflicting_scripts: Vec<String>,
+        only_hkcu_after: bool,
+    },
     ElevationPrompt,
     RollbackPicker {
         files: Vec<PathBuf>,
@@ -884,6 +905,56 @@ impl TuiApp {
                     Ok(TuiEffect::Continue)
                 }
             },
+            Modal::ScriptConflictPrompt {
+                folder_path,
+                existing_txt_files,
+                conflicting_scripts,
+                only_hkcu_after,
+            } => {
+                let only_override = if only_hkcu_after {
+                    Some(hkcu_only_rule_ids(&self.cfg, rules))
+                } else {
+                    None
+                };
+                match code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                        self.execute_apply_with_conflict(
+                            ops,
+                            rules,
+                            false,
+                            only_override,
+                            Some(ScriptConflictPolicy::Overwrite),
+                        )?;
+                        Ok(TuiEffect::Continue)
+                    }
+                    KeyCode::Char('n') | KeyCode::Char('N') => {
+                        self.execute_apply_with_conflict(
+                            ops,
+                            rules,
+                            false,
+                            only_override,
+                            Some(ScriptConflictPolicy::Skip),
+                        )?;
+                        Ok(TuiEffect::Continue)
+                    }
+                    KeyCode::Esc => {
+                        self.set_notification(
+                            NotificationLevel::Info,
+                            "Penerapan dibatalkan karena konflik berkas .txt.",
+                        );
+                        Ok(TuiEffect::Continue)
+                    }
+                    _ => {
+                        self.modal = Modal::ScriptConflictPrompt {
+                            folder_path,
+                            existing_txt_files,
+                            conflicting_scripts,
+                            only_hkcu_after,
+                        };
+                        Ok(TuiEffect::Continue)
+                    }
+                }
+            }
             Modal::ElevationPrompt => match code {
                 KeyCode::Char('e') | KeyCode::Char('E') | KeyCode::Enter => {
                     if self.os_is_admin {
@@ -904,27 +975,8 @@ impl TuiApp {
                     }
                 }
                 KeyCode::Char('o') | KeyCode::Char('O') => {
-                    let hkcu_only: Vec<String> = rules
-                        .iter()
-                        .filter(|r| !r.requires_admin() && r.is_enabled(&self.cfg))
-                        .map(|r| r.id().to_string())
-                        .collect();
-                    let opts = ApplyOptions {
-                        strict: self.exec_options.strict,
-                        no_backup: !self.exec_options.backup_enabled,
-                        restart_explorer: self.exec_options.restart_explorer,
-                        only: hkcu_only,
-                        user_target: None,
-                        ..Default::default()
-                    };
-                    let scoped_ops = PrivilegeScopedOps {
-                        inner: ops,
-                        simulated_admin: self.active_privilege == ActivePrivilege::Admin,
-                    };
-                    let report = apply_rules(&scoped_ops, &self.cfg, rules, &opts, &self.exe_dir)?;
-                    self.show_run_report("Terapkan (Khusus HKCU)", &report);
-                    self.notify_run_report("Penerapan khusus HKCU selesai", &report);
-                    self.refresh_check(ops, rules)?;
+                    let hkcu_only = hkcu_only_rule_ids(&self.cfg, rules);
+                    self.execute_apply_with_conflict(ops, rules, false, Some(hkcu_only), None)?;
                     Ok(TuiEffect::Continue)
                 }
                 KeyCode::Esc => Ok(TuiEffect::Continue),
@@ -1458,21 +1510,47 @@ impl TuiApp {
         rules: &[Box<dyn Rule>],
         force_dry_run: bool,
     ) -> Result<()> {
+        self.execute_apply_with_conflict(ops, rules, force_dry_run, None, None)
+    }
+
+    fn execute_apply_with_conflict(
+        &mut self,
+        ops: &dyn SystemOps,
+        rules: &[Box<dyn Rule>],
+        force_dry_run: bool,
+        only_override: Option<Vec<String>>,
+        script_conflict: Option<ScriptConflictPolicy>,
+    ) -> Result<()> {
         self.cfg.validate()?;
         let dry_run = force_dry_run || self.exec_options.mode == ExecutionMode::DryRun;
-        let only_rules: Vec<String> = match self.exec_options.scope {
-            ExecutionScope::AllEnabled => Vec::new(),
-            ExecutionScope::HkcuOnly => rules
-                .iter()
-                .filter(|r| !r.requires_admin() && is_rule_enabled(&self.cfg, r.id()))
-                .map(|r| r.id().to_string())
-                .collect(),
-            ExecutionScope::HklmOnly => rules
-                .iter()
-                .filter(|r| r.requires_admin() && is_rule_enabled(&self.cfg, r.id()))
-                .map(|r| r.id().to_string())
-                .collect(),
-        };
+        let is_hkcu_override = only_override.is_some();
+        let only_rules: Vec<String> =
+            only_override.unwrap_or_else(|| match self.exec_options.scope {
+                ExecutionScope::AllEnabled => Vec::new(),
+                ExecutionScope::HkcuOnly => hkcu_only_rule_ids(&self.cfg, rules),
+                ExecutionScope::HklmOnly => rules
+                    .iter()
+                    .filter(|r| r.requires_admin() && is_rule_enabled(&self.cfg, r.id()))
+                    .map(|r| r.id().to_string())
+                    .collect(),
+            });
+
+        let scripts_folder_selected = self.cfg.rules.scripts_folder.enabled
+            && rules.iter().any(|r| r.id() == "scripts_folder")
+            && (only_rules.is_empty() || only_rules.iter().any(|id| id == "scripts_folder"));
+
+        if !dry_run && script_conflict.is_none() && scripts_folder_selected {
+            let insp = inspect_scripts_folder(ops, &self.cfg)?;
+            if !insp.conflicting_scripts.is_empty() {
+                self.modal = Modal::ScriptConflictPrompt {
+                    folder_path: insp.target_path,
+                    existing_txt_files: insp.existing_txt_files,
+                    conflicting_scripts: insp.conflicting_scripts,
+                    only_hkcu_after: is_hkcu_override,
+                };
+                return Ok(());
+            }
+        }
 
         let opts = ApplyOptions {
             dry_run,
@@ -1480,10 +1558,17 @@ impl TuiApp {
             no_backup: !self.exec_options.backup_enabled,
             restart_explorer: self.exec_options.restart_explorer,
             only: only_rules,
-            user_target: self.user_target.clone(),
+            user_target: if is_hkcu_override {
+                None
+            } else {
+                self.user_target.clone()
+            },
+            script_conflict: script_conflict.unwrap_or_default(),
             ..Default::default()
         };
-        let title = if dry_run {
+        let title = if is_hkcu_override {
+            "Terapkan (Khusus HKCU)"
+        } else if dry_run {
             "Hasil Simulasi (Dry-Run)"
         } else {
             "Hasil Penerapan"
@@ -1494,7 +1579,9 @@ impl TuiApp {
         };
         let rep = apply_rules(&scoped_ops, &self.cfg, rules, &opts, &self.exe_dir)?;
         self.show_run_report(title, &rep);
-        let note_prefix = if dry_run {
+        let note_prefix = if is_hkcu_override {
+            "Penerapan khusus HKCU selesai"
+        } else if dry_run {
             "Simulasi selesai"
         } else {
             "Penerapan selesai"
@@ -2362,6 +2449,47 @@ fn draw_modal(frame: &mut ratatui::Frame, app: &TuiApp) {
                     .alignment(Alignment::Center);
             frame.render_widget(foot_p, chunks[2]);
         }
+        Modal::ScriptConflictPrompt {
+            folder_path,
+            existing_txt_files,
+            conflicting_scripts,
+            ..
+        } => {
+            let area = centered_rect(72, 48, frame.area());
+            frame.render_widget(Clear, area);
+            let lines = vec![
+                Line::from(vec![Span::styled(
+                    format!("Konflik Berkas Skrip di {folder_path}"),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )]),
+                Line::from(""),
+                Line::from("Folder tujuan sudah ada dan berisi berkas .txt yang sama namanya:"),
+                Line::from(format!(
+                    "  Konflik .txt     : {}",
+                    conflicting_scripts.join(", ")
+                )),
+                Line::from(format!(
+                    "  Semua .txt ada   : {}",
+                    existing_txt_files.join(", ")
+                )),
+                Line::from(""),
+                Line::from(
+                    "Apakah berkas skrip .txt tersebut mau ditiban (rewrite) dengan yang baru?",
+                ),
+                Line::from(""),
+                Line::from(
+                    "[Y / Enter] Timpa (Rewrite)  |  [N] Lewati (Pertahankan lama)  |  [Esc] Batal",
+                ),
+            ];
+            let p = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Konfirmasi Timpa Skrip .txt"),
+            );
+            frame.render_widget(p, area);
+        }
         Modal::ElevationPrompt => {
             let area = centered_rect(65, 36, frame.area());
             frame.render_widget(Clear, area);
@@ -2695,7 +2823,7 @@ fn documentation_lines() -> Vec<String> {
         "  Langsung Real-Time (Win32 API + Broadcast WM_SETTINGCHANGE):",
         "    visual_effects (animasi via SystemParametersInfoW), screensaver,",
         "    typing, power (skema daya aktif), diagnostics, defender_firewall,",
-        "    dan system_restore.",
+        "    system_restore, dan scripts_folder (buat C:\\Skrip).",
         "  Real-Time via Muat Ulang Explorer ([RESTART: ON] bawaan di [o]):",
         "    taskbar dan search. Bila [RESTART: OFF], efek visual menunggu",
         "    logout atau restart explorer.exe.",
@@ -2706,7 +2834,7 @@ fn documentation_lines() -> Vec<String> {
         "      PasswordNeverExpires langsung tercatat), startup_apps (login",
         "      berikutnya; aplikasi yang sudah terlanjur berjalan tetap aktif).",
         "",
-        "=== DAFTAR 13 MODUL PENGAMANAN ===",
+        "=== DAFTAR 14 MODUL PENGAMANAN ===",
         "  [HKCU] visual_effects    : Animasi jendela & transparansi tampilan",
         "  [HKLM] diagnostics       : Pembatasan telemetri & frekuensi umpan balik",
         "  [HKLM] search            : Nonaktif Bing/MSA/AAD cloud search & highlights",
@@ -2720,6 +2848,7 @@ fn documentation_lines() -> Vec<String> {
         "  [HKLM] password_policy   : Panjang, kompleksitas, masa berlaku & lockout",
         "  [HKLM] defender_firewall : Defender, profil Firewall & aturan ICMP",
         "  [HKLM] startup_apps      : Nonaktifkan startup non-allowlist (StartupApproved)",
+        "  [DISK] scripts_folder    : Buat folder C:\\Skrip & deteksi konflik .txt",
     ]
     .into_iter()
     .map(str::to_string)
@@ -2754,6 +2883,14 @@ fn check_all(
     check_rules(ops, cfg, rules, &all_ids, &[])
 }
 
+fn hkcu_only_rule_ids(cfg: &ProfileConfig, rules: &[Box<dyn Rule>]) -> Vec<String> {
+    rules
+        .iter()
+        .filter(|r| !r.requires_admin() && is_rule_enabled(cfg, r.id()))
+        .map(|r| r.id().to_string())
+        .collect()
+}
+
 pub fn is_rule_enabled(cfg: &ProfileConfig, id: &str) -> bool {
     match id {
         "visual_effects" => cfg.rules.visual_effects.enabled,
@@ -2769,6 +2906,7 @@ pub fn is_rule_enabled(cfg: &ProfileConfig, id: &str) -> bool {
         "password_policy" => cfg.rules.password_policy.enabled,
         "defender_firewall" => cfg.rules.defender_firewall.enabled,
         "startup_apps" => cfg.rules.startup_apps.enabled,
+        "scripts_folder" => cfg.rules.scripts_folder.enabled,
         _ => false,
     }
 }
@@ -2790,6 +2928,7 @@ pub fn toggle_rule_enabled(cfg: &mut ProfileConfig, id: &str) {
             cfg.rules.defender_firewall.enabled = !cfg.rules.defender_firewall.enabled
         }
         "startup_apps" => cfg.rules.startup_apps.enabled = !cfg.rules.startup_apps.enabled,
+        "scripts_folder" => cfg.rules.scripts_folder.enabled = !cfg.rules.scripts_folder.enabled,
         _ => {}
     }
 }
@@ -3208,6 +3347,18 @@ fn fields_for_rule(cfg: &ProfileConfig, id: &str) -> Vec<EditableField> {
                 kind: FieldKind::Text(r.startup_apps.allowlist.join(",")),
             },
         ],
+        "scripts_folder" => vec![
+            EditableField {
+                key: "enabled",
+                label: "Aktif",
+                kind: FieldKind::Bool(r.scripts_folder.enabled),
+            },
+            EditableField {
+                key: "path",
+                label: "Path Folder Skrip",
+                kind: FieldKind::Text(r.scripts_folder.path.clone()),
+            },
+        ],
         _ => Vec::new(),
     }
 }
@@ -3491,6 +3642,14 @@ fn apply_fields_to_config(cfg: &mut ProfileConfig, id: &str, fields: &[EditableF
                     .map(|p| p.trim().to_string())
                     .filter(|p| !p.is_empty())
                     .collect();
+            }
+        }
+        "scripts_folder" => {
+            if let Some(v) = get_b("enabled") {
+                r.scripts_folder.enabled = v;
+            }
+            if let Some(s) = get_s("path") {
+                r.scripts_folder.path = s;
             }
         }
         _ => {}
@@ -4305,5 +4464,38 @@ mod tests {
         app.cfg.rules.system_restore.drive = "INVALID".into();
         let err = app.execute_apply(&ops, &rules, false).unwrap_err();
         assert!(err.to_string().contains("drive must look like"));
+    }
+
+    #[test]
+    fn tui_a_key_opens_script_conflict_prompt_when_txt_conflicts() {
+        let ops = FakeSystemOps::default();
+        ops.state.borrow_mut().admin = true;
+        let script_path = Path::new(r"C:\Skrip\init.txt");
+        ops.create_dir_all(Path::new(r"C:\Skrip")).unwrap();
+        ops.seed_file(script_path, b"old-txt");
+
+        let mut cfg = ProfileConfig::embedded_default();
+        cfg.rules.scripts_folder.scripts = vec![crate::config::ScriptFileSpec {
+            name: "init.txt".into(),
+            content: "new-txt".into(),
+        }];
+        let dir = std::env::temp_dir().join(format!("it-tools-tui-sc-{}", std::process::id()));
+        let rules = crate::rules::all_rules();
+        let mut app =
+            TuiApp::new(&ops, &rules, cfg, dir.join("it-tools.toml"), dir, vec![]).unwrap();
+
+        app.handle_key(KeyCode::Char('a'), &ops, &rules).unwrap();
+        assert!(matches!(app.modal, Modal::ConfirmApply));
+        app.handle_key(KeyCode::Char('y'), &ops, &rules).unwrap();
+        assert!(matches!(
+            app.modal,
+            Modal::ScriptConflictPrompt {
+                ref conflicting_scripts,
+                ..
+            } if conflicting_scripts == &vec!["init.txt".to_string()]
+        ));
+
+        app.handle_key(KeyCode::Char('y'), &ops, &rules).unwrap();
+        assert_eq!(ops.read_file_opt(script_path).unwrap().unwrap(), b"new-txt");
     }
 }
