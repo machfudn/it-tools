@@ -5,6 +5,7 @@ pub mod edge;
 pub mod password_policy;
 pub mod power;
 pub mod screensaver;
+pub mod scripts_folder;
 pub mod search;
 pub mod startup_apps;
 pub mod system_restore;
@@ -29,5 +30,6 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(password_policy::PasswordPolicyRule),
         Box::new(defender_firewall::DefenderFirewallRule),
         Box::new(startup_apps::StartupAppsRule),
+        Box::new(scripts_folder::ScriptsFolderRule),
     ]
 }
