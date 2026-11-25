@@ -45,6 +45,9 @@ pub trait Rule {
     }
     fn requires_admin(&self) -> bool;
     fn is_enabled(&self, cfg: &ProfileConfig) -> bool;
+    fn handles_user_target(&self) -> bool {
+        false
+    }
     fn check(&self, ops: &dyn SystemOps, cfg: &ProfileConfig) -> Result<RuleCheck>;
     fn apply(
         &self,
@@ -165,6 +168,12 @@ pub fn apply_rules(
         });
     }
 
+    if opts.user_target.is_some() && !selected.iter().any(|r| r.handles_user_target()) {
+        anyhow::bail!(
+            "Target akun lokal (--target-user / --create-user / [u]) membutuhkan modul 'password_policy' dalam keadaan aktif dan termasuk dalam cakupan eksekusi."
+        );
+    }
+
     if !ops.is_admin() && selected.iter().any(|r| r.requires_admin()) {
         return Err(EngineError::ElevationRequired.into());
     }
@@ -177,17 +186,23 @@ pub fn apply_rules(
 
     for rule in selected {
         match rule.apply(ops, cfg, opts, &mut snap) {
-            Ok((outcome, changes)) => {
+            Ok((outcome, mut changes)) => {
                 if matches!(outcome, RuleOutcome::Applied) {
                     if matches!(
                         rule.id(),
-                        "visual_effects" | "screensaver" | "accessibility"
+                        "visual_effects" | "screensaver" | "accessibility" | "typing" | "search"
                     ) {
                         touched_ui = true;
                     }
-                    if rule.id() == "taskbar" {
+                    if matches!(rule.id(), "taskbar" | "search") {
                         touched_ui = true;
                         touched_taskbar = true;
+                        if rule.id() == "taskbar" && !opts.restart_explorer {
+                            changes.push(
+                                "catatan: aktifkan [RESTART: ON] / --restart-explorer atau muat ulang explorer.exe agar perubahan taskbar langsung terlihat"
+                                    .into(),
+                            );
+                        }
                     }
                 }
                 if !opts.no_backup && !snap.is_empty() {
@@ -393,5 +408,80 @@ mod tests {
             )?;
             Ok((report::RuleOutcome::Applied, vec!["set Val=1".into()]))
         }
+    }
+
+    #[test]
+    fn user_target_errors_when_no_selected_rule_handles_it() {
+        let ops = FakeSystemOps::default();
+        let cfg = ProfileConfig::embedded_default();
+        let dir = std::env::temp_dir().join(format!("it-tools-eng-ut-{}", std::process::id()));
+        let rules: Vec<Box<dyn Rule>> = vec![Box::new(DummyRegRule { needs_admin: false })];
+        let opts = ApplyOptions {
+            user_target: Some(UserTargetOptions {
+                username: "StaffUser".into(),
+                create_if_missing: true,
+                clear_dont_expire: true,
+                temp_password: Some("TempPass!1".into()),
+            }),
+            ..Default::default()
+        };
+        let err = apply_rules(&ops, &cfg, &rules, &opts, &dir).unwrap_err();
+        assert!(err.to_string().contains("password_policy"));
+    }
+
+    #[test]
+    fn typing_and_search_trigger_broadcast_and_search_restarts_explorer_when_enabled() {
+        let ops = FakeSystemOps::default();
+        ops.state.borrow_mut().admin = true;
+        let cfg = ProfileConfig::embedded_default();
+        let dir = std::env::temp_dir().join(format!("it-tools-eng-ui-{}", std::process::id()));
+        let rules: Vec<Box<dyn Rule>> = vec![
+            Box::new(crate::rules::typing::TypingRule),
+            Box::new(crate::rules::search::SearchRule),
+        ];
+
+        let typing_opts = ApplyOptions {
+            no_backup: true,
+            only: vec!["typing".into()],
+            ..Default::default()
+        };
+        apply_rules(&ops, &cfg, &rules, &typing_opts, &dir).unwrap();
+        assert_eq!(ops.state.borrow().broadcasts, 1);
+        assert_eq!(ops.state.borrow().explorer_restarts, 0);
+
+        let search_opts = ApplyOptions {
+            no_backup: true,
+            restart_explorer: true,
+            only: vec!["search".into()],
+            ..Default::default()
+        };
+        apply_rules(&ops, &cfg, &rules, &search_opts, &dir).unwrap();
+        assert_eq!(ops.state.borrow().broadcasts, 2);
+        assert_eq!(ops.state.borrow().explorer_restarts, 1);
+    }
+
+    #[test]
+    fn taskbar_without_restart_explorer_skips_restart_and_adds_hint() {
+        let ops = FakeSystemOps::default();
+        let cfg = ProfileConfig::embedded_default();
+        let dir = std::env::temp_dir().join(format!("it-tools-eng-tb-{}", std::process::id()));
+        let rules: Vec<Box<dyn Rule>> = vec![Box::new(crate::rules::taskbar::TaskbarRule)];
+
+        let opts = ApplyOptions {
+            no_backup: true,
+            restart_explorer: false,
+            only: vec!["taskbar".into()],
+            ..Default::default()
+        };
+        let report = apply_rules(&ops, &cfg, &rules, &opts, &dir).unwrap();
+        assert_eq!(ops.state.borrow().broadcasts, 1);
+        assert_eq!(ops.state.borrow().explorer_restarts, 0);
+        let entry = report.entries.iter().find(|e| e.id == "taskbar").unwrap();
+        assert!(
+            entry
+                .changes
+                .iter()
+                .any(|c| c.to_ascii_lowercase().contains("explorer"))
+        );
     }
 }
