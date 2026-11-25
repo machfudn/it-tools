@@ -26,6 +26,13 @@ pub struct UserTargetOptions {
     pub temp_password: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScriptConflictPolicy {
+    #[default]
+    Skip,
+    Overwrite,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ApplyOptions {
     pub dry_run: bool,
@@ -35,6 +42,7 @@ pub struct ApplyOptions {
     pub only: Vec<String>,
     pub skip: Vec<String>,
     pub user_target: Option<UserTargetOptions>,
+    pub script_conflict: ScriptConflictPolicy,
 }
 
 pub trait Rule {
