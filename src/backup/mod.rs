@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::platform::{RegHive, RegValue, SystemOps};
+use crate::platform::{RegHive, RegValue, SystemOps, decode_hex, encode_hex};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", content = "data", rename_all = "snake_case")]
@@ -66,6 +66,12 @@ pub struct EdgeLocalStateBackup {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileWriteBackup {
+    pub path: String,
+    pub prior_hex: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackupSnapshot {
     pub version: u32,
     pub created_at: String,
@@ -78,6 +84,10 @@ pub struct BackupSnapshot {
     pub user_flags: Vec<UserFlagBackup>,
     pub startup_approved: Vec<RegBackupEntry>,
     pub edge_local_state: Option<EdgeLocalStateBackup>,
+    #[serde(default)]
+    pub created_dirs: Vec<String>,
+    #[serde(default)]
+    pub file_writes: Vec<FileWriteBackup>,
 }
 
 impl BackupSnapshot {
@@ -94,6 +104,8 @@ impl BackupSnapshot {
             user_flags: Vec::new(),
             startup_approved: Vec::new(),
             edge_local_state: None,
+            created_dirs: Vec::new(),
+            file_writes: Vec::new(),
         }
     }
 
@@ -106,6 +118,8 @@ impl BackupSnapshot {
             && self.user_flags.is_empty()
             && self.startup_approved.is_empty()
             && self.edge_local_state.is_none()
+            && self.created_dirs.is_empty()
+            && self.file_writes.is_empty()
     }
 
     pub fn requires_admin(&self) -> bool {
@@ -202,6 +216,28 @@ impl BackupSnapshot {
         self.record_reg_once(ops, hive, path, name)?;
         ops.reg_delete_value(hive, path, name)?;
         Ok(true)
+    }
+
+    pub fn record_dir_created_once(&mut self, dir: &Path) {
+        let s = dir.to_string_lossy().into_owned();
+        if !self.created_dirs.iter().any(|d| d.eq_ignore_ascii_case(&s)) {
+            self.created_dirs.push(s);
+        }
+    }
+
+    pub fn record_file_write_once(&mut self, path: &Path, prior_bytes: Option<&[u8]>) {
+        let s = path.to_string_lossy().into_owned();
+        if self
+            .file_writes
+            .iter()
+            .any(|f| f.path.eq_ignore_ascii_case(&s))
+        {
+            return;
+        }
+        self.file_writes.push(FileWriteBackup {
+            path: s,
+            prior_hex: prior_bytes.map(encode_hex),
+        });
     }
 
     pub fn save_to_path(&self, path: &Path) -> Result<()> {
@@ -501,6 +537,33 @@ pub fn rollback_snapshot(ops: &dyn SystemOps, snap: &BackupSnapshot) -> Result<V
             "restored user '{}' PasswordNeverExpires={}",
             uf.username, uf.prior_dont_expire
         ));
+    }
+
+    for fw in snap.file_writes.iter().rev() {
+        let p = PathBuf::from(&fw.path);
+        match &fw.prior_hex {
+            None => {
+                ops.remove_file_opt(&p)?;
+                actions.push(format!("removed created file {}", fw.path));
+            }
+            Some(hex) => {
+                let bytes = decode_hex(hex)
+                    .with_context(|| format!("decode backup bytes for {}", fw.path))?;
+                ops.write_file(&p, &bytes)?;
+                actions.push(format!("restored overwritten file {}", fw.path));
+            }
+        }
+    }
+
+    for dir in snap.created_dirs.iter().rev() {
+        let p = PathBuf::from(dir);
+        if ops.remove_empty_dir(&p)? {
+            actions.push(format!("removed empty directory {dir}"));
+        } else {
+            actions.push(format!(
+                "skipped removing directory {dir} (tidak kosong atau sudah dihapus)"
+            ));
+        }
     }
 
     let _ = ops.broadcast_setting_change();
