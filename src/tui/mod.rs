@@ -67,6 +67,10 @@ impl<'a> SystemOps for PrivilegeScopedOps<'a> {
         self.inner.startup_folders()
     }
 
+    fn list_dir_files(&self, dir: &Path) -> Result<Vec<String>> {
+        self.inner.list_dir_files(dir)
+    }
+
     fn read_file_opt(&self, path: &Path) -> Result<Option<Vec<u8>>> {
         self.inner.read_file_opt(path)
     }
@@ -197,7 +201,7 @@ impl Default for ExecutionOptions {
             mode: ExecutionMode::Live,
             backup_enabled: true,
             strict: false,
-            restart_explorer: false,
+            restart_explorer: true,
             scope: ExecutionScope::AllEnabled,
         }
     }
@@ -404,16 +408,19 @@ impl TuiApp {
                         }
                         KeyCode::Enter => {
                             if let Some(f) = fields.get_mut(cursor) {
-                                apply_text_to_field(f, &buf);
-                                apply_fields_to_config(&mut self.cfg, &rule_id, &fields);
-                                self.config_dirty = true;
-                                self.refresh_check(ops, rules)?;
-                                self.set_notification(
-                                    NotificationLevel::Info,
-                                    format!(
-                                        "Parameter '{rule_id}' diubah (tekan [s] untuk simpan)."
-                                    ),
-                                );
+                                if let Err(msg) = apply_text_to_field(f, &buf) {
+                                    self.set_notification(NotificationLevel::Warning, msg);
+                                } else {
+                                    apply_fields_to_config(&mut self.cfg, &rule_id, &fields);
+                                    self.config_dirty = true;
+                                    self.refresh_check(ops, rules)?;
+                                    self.set_notification(
+                                        NotificationLevel::Info,
+                                        format!(
+                                            "Parameter '{rule_id}' diubah (tekan [s] untuk simpan)."
+                                        ),
+                                    );
+                                }
                             }
                             self.modal = Modal::EditFields {
                                 rule_id,
@@ -760,6 +767,11 @@ impl TuiApp {
                                     NotificationLevel::Success,
                                     format!("Target akun disetel: '{}'.", u.name),
                                 );
+                            } else {
+                                self.set_notification(
+                                    NotificationLevel::Warning,
+                                    "Daftar akun lokal kosong; isi Nama Akun Baru terlebih dahulu.",
+                                );
                             }
                         }
                     }
@@ -898,6 +910,9 @@ impl TuiApp {
                         .map(|r| r.id().to_string())
                         .collect();
                     let opts = ApplyOptions {
+                        strict: self.exec_options.strict,
+                        no_backup: !self.exec_options.backup_enabled,
+                        restart_explorer: self.exec_options.restart_explorer,
                         only: hkcu_only,
                         user_target: None,
                         ..Default::default()
@@ -935,7 +950,29 @@ impl TuiApp {
                 KeyCode::Enter => {
                     if let Some(path) = files.get(cursor) {
                         let snap = BackupSnapshot::load_from_file(path)?;
-                        let actions = rollback_snapshot(ops, &snap)?;
+                        if snap.requires_admin() && self.active_privilege != ActivePrivilege::Admin
+                        {
+                            self.set_notification(
+                                NotificationLevel::Warning,
+                                "Snapshot ini memuat pengaturan HKLM/Admin. Tekan [x] untuk beralih ke Administrator sebelum memulihkan.",
+                            );
+                            return Ok(TuiEffect::Continue);
+                        }
+                        let scoped_ops = PrivilegeScopedOps {
+                            inner: ops,
+                            simulated_admin: self.active_privilege == ActivePrivilege::Admin,
+                        };
+                        let actions = rollback_snapshot(&scoped_ops, &snap)?;
+                        if self.exec_options.restart_explorer
+                            && actions.iter().any(|a| {
+                                a.contains("StuckRects3")
+                                    || a.contains("Taskbar")
+                                    || a.contains("SearchSettings")
+                                    || a.contains("Windows Search")
+                            })
+                        {
+                            let _ = ops.restart_explorer();
+                        }
                         let count = actions.len();
                         self.modal = Modal::ReportView {
                             title: format!("Pemulihan: {}", path.display()),
@@ -1421,6 +1458,7 @@ impl TuiApp {
         rules: &[Box<dyn Rule>],
         force_dry_run: bool,
     ) -> Result<()> {
+        self.cfg.validate()?;
         let dry_run = force_dry_run || self.exec_options.mode == ExecutionMode::DryRun;
         let only_rules: Vec<String> = match self.exec_options.scope {
             ExecutionScope::AllEnabled => Vec::new(),
@@ -2568,7 +2606,7 @@ fn documentation_lines() -> Vec<String> {
         "  MODE SIMULASI    : Hanya simulasi (Dry-Run), nol perubahan ke Windows.",
         "  BACKUP (ON/OFF)  : Membuat snapshot JSON otomatis sebelum eksekusi.",
         "  STRICT (ON/OFF)  : Hentikan proses jika ada 1 modul yang mengalami galat.",
-        "  RESTART (ON/OFF) : Muat ulang explorer.exe otomatis jika taskbar berubah.",
+        "  RESTART (ON/OFF) : Muat ulang explorer.exe otomatis jika taskbar/search berubah.",
         "",
         "=== ARTI STATUS & LENCANA MODUL ===",
         "  SESUAI   (Compliant)  : Pengaturan Windows sudah cocok dengan target profil.",
@@ -2652,6 +2690,21 @@ fn documentation_lines() -> Vec<String> {
         "  Kanal Rilis (Stable vs Beta)",
         "    Stable mengikuti rilis produksi final; Beta mengikuti prarilis UAT",
         "    untuk uji coba fitur sebelum dipromosikan ke Stable.",
+        "",
+        "=== EFEK REAL-TIME VS RESTART/LOGIN ===",
+        "  Langsung Real-Time (Win32 API + Broadcast WM_SETTINGCHANGE):",
+        "    visual_effects (animasi via SystemParametersInfoW), screensaver,",
+        "    typing, power (skema daya aktif), diagnostics, defender_firewall,",
+        "    dan system_restore.",
+        "  Real-Time via Muat Ulang Explorer ([RESTART: ON] bawaan di [o]):",
+        "    taskbar dan search. Bila [RESTART: OFF], efek visual menunggu",
+        "    logout atau restart explorer.exe.",
+        "  Berlaku Saat Aplikasi/Login/Boot Berikutnya:",
+        "    accessibility (PrintScreen di sesi baru/Snipping Tool),",
+        "    edge (instance Edge yang sudah berjalan perlu dibuka ulang),",
+        "    password_policy (aturan akun untuk validasi/login berikutnya; [u]",
+        "      PasswordNeverExpires langsung tercatat), startup_apps (login",
+        "      berikutnya; aplikasi yang sudah terlanjur berjalan tetap aktif).",
         "",
         "=== DAFTAR 13 MODUL PENGAMANAN ===",
         "  [HKCU] visual_effects    : Animasi jendela & transparansi tampilan",
@@ -2761,15 +2814,23 @@ fn format_field_value(kind: &FieldKind) -> String {
     }
 }
 
-fn apply_text_to_field(f: &mut EditableField, text: &str) {
+fn apply_text_to_field(f: &mut EditableField, text: &str) -> std::result::Result<(), String> {
     match &mut f.kind {
-        FieldKind::Text(s) => *s = text.trim().to_string(),
-        FieldKind::U32(n) => {
-            if let Ok(parsed) = text.trim().parse::<u32>() {
-                *n = parsed;
-            }
+        FieldKind::Text(s) => {
+            *s = text.trim().to_string();
+            Ok(())
         }
-        _ => {}
+        FieldKind::U32(n) => {
+            let parsed = text.trim().parse::<u32>().map_err(|_| {
+                format!(
+                    "Nilai '{}' bukan angka bulat positif yang valid.",
+                    text.trim()
+                )
+            })?;
+            *n = parsed;
+            Ok(())
+        }
+        _ => Ok(()),
     }
 }
 
@@ -3964,8 +4025,9 @@ mod tests {
         // Move to cursor 3 (restart_explorer) and toggle
         app.handle_key(KeyCode::Down, &ops, &[]).unwrap();
         assert!(matches!(app.modal, Modal::ExecutionOptions { cursor: 3 }));
-        app.handle_key(KeyCode::Char(' '), &ops, &[]).unwrap();
         assert!(app.exec_options.restart_explorer);
+        app.handle_key(KeyCode::Char(' '), &ops, &[]).unwrap();
+        assert!(!app.exec_options.restart_explorer);
 
         // Move to cursor 4 (scope) and cycle
         app.handle_key(KeyCode::Down, &ops, &[]).unwrap();
@@ -4148,5 +4210,100 @@ mod tests {
         app.handle_key(KeyCode::Char(' '), &ops, &[]).unwrap();
         assert_eq!(app.active_privilege, ActivePrivilege::Admin);
         assert!(app.status_banner.contains("ADMINISTRATOR"));
+    }
+
+    #[test]
+    fn tui_b_rollback_blocks_admin_snapshot_when_standard_without_partial_mutation() {
+        let ops = FakeSystemOps::default();
+        ops.seed_reg(
+            RegHive::Hkcu,
+            r"Software\Test",
+            "UserVal",
+            RegValue::Dword(2),
+        );
+        ops.seed_reg(
+            RegHive::Hklm,
+            r"SOFTWARE\Test",
+            "AdminVal",
+            RegValue::Dword(2),
+        );
+
+        let dir = std::env::temp_dir().join(format!("it-tools-tui-rbsafe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bk_path = dir.join("it-tools.backup.20261125-120000.json");
+
+        let mut snap = BackupSnapshot::new(&ops);
+        snap.registry.push(crate::backup::RegBackupEntry {
+            hive: RegHive::Hkcu,
+            path: r"Software\Test".into(),
+            name: "UserVal".into(),
+            prior: crate::backup::PriorRegValue::Present(RegValue::Dword(1)),
+        });
+        snap.registry.push(crate::backup::RegBackupEntry {
+            hive: RegHive::Hklm,
+            path: r"SOFTWARE\Test".into(),
+            name: "AdminVal".into(),
+            prior: crate::backup::PriorRegValue::Present(RegValue::Dword(1)),
+        });
+        snap.save_to_path(&bk_path).unwrap();
+
+        let mut app = TuiApp::new(
+            &ops,
+            &[],
+            ProfileConfig::embedded_default(),
+            dir.join("it-tools.toml"),
+            dir.clone(),
+            vec![],
+        )
+        .unwrap();
+
+        // Switch to simulated Standard User via [x]
+        app.handle_key(KeyCode::Char('x'), &ops, &[]).unwrap();
+        assert_eq!(app.active_privilege, ActivePrivilege::Standard);
+
+        // Open rollback picker and attempt restore
+        app.handle_key(KeyCode::Char('b'), &ops, &[]).unwrap();
+        assert!(matches!(app.modal, Modal::RollbackPicker { .. }));
+        app.handle_key(KeyCode::Enter, &ops, &[]).unwrap();
+
+        // Must refuse cleanly WITHOUT partially mutating HKCU!
+        assert_eq!(app.notification_level, NotificationLevel::Warning);
+        assert!(app.status_banner.contains("HKLM/Admin"));
+        assert_eq!(
+            ops.reg_read(RegHive::Hkcu, r"Software\Test", "UserVal")
+                .unwrap(),
+            Some(RegValue::Dword(2))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tui_edit_fields_warns_on_invalid_u32_and_execute_apply_rejects_invalid_config() {
+        let ops = FakeSystemOps::default();
+        let dir = std::env::temp_dir().join(format!("it-tools-tui-val-{}", std::process::id()));
+        let rules = crate::rules::all_rules();
+        let mut app = TuiApp::new(
+            &ops,
+            &rules,
+            ProfileConfig::embedded_default(),
+            dir.join("it-tools.toml"),
+            dir,
+            vec![],
+        )
+        .unwrap();
+
+        // Verify apply_text_to_field returns Err on invalid U32
+        let mut num_field = EditableField {
+            key: "min_len",
+            label: "Panjang Minimal",
+            kind: FieldKind::U32(12),
+        };
+        assert!(apply_text_to_field(&mut num_field, "abc").is_err());
+
+        // Set invalid drive in-memory and trigger confirm apply -> execute_apply must reject
+        app.cfg.rules.system_restore.drive = "INVALID".into();
+        let err = app.execute_apply(&ops, &rules, false).unwrap_err();
+        assert!(err.to_string().contains("drive must look like"));
     }
 }
