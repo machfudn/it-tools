@@ -265,6 +265,25 @@ impl SystemOps for FakeSystemOps {
         ]
     }
 
+    fn list_dir_files(&self, dir: &Path) -> Result<Vec<String>> {
+        let mut prefix = Self::norm_file(dir);
+        if !prefix.ends_with('\\') {
+            prefix.push('\\');
+        }
+        let st = self.state.borrow();
+        let mut names = Vec::new();
+        for key in st.files.keys() {
+            if let Some(rest) = key.strip_prefix(&prefix)
+                && !rest.is_empty()
+                && !rest.contains('\\')
+                && !rest.eq_ignore_ascii_case("desktop.ini")
+            {
+                names.push(rest.to_string());
+            }
+        }
+        Ok(names)
+    }
+
     fn read_file_opt(&self, path: &Path) -> Result<Option<Vec<u8>>> {
         let st = self.state.borrow();
         Ok(st.files.get(&Self::norm_file(path)).cloned())

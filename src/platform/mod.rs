@@ -72,6 +72,10 @@ pub trait SystemOps {
 
     fn local_appdata_dir(&self) -> Option<PathBuf>;
     fn startup_folders(&self) -> Vec<(String, PathBuf)>;
+    fn list_dir_files(&self, dir: &Path) -> Result<Vec<String>> {
+        let _ = dir;
+        Ok(Vec::new())
+    }
     fn read_file_opt(&self, path: &Path) -> Result<Option<Vec<u8>>>;
     fn write_file(&self, path: &Path, bytes: &[u8]) -> Result<()>;
     fn remove_file_opt(&self, path: &Path) -> Result<()>;

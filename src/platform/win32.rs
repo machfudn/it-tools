@@ -39,7 +39,11 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 use windows_sys::Win32::System::SystemInformation::GetLocalTime;
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    HWND_BROADCAST, SMTO_ABORTIFHUNG, SW_SHOWNORMAL, SendMessageTimeoutW, WM_SETTINGCHANGE,
+    ANIMATIONINFO, HWND_BROADCAST, SMTO_ABORTIFHUNG, SPI_SETANIMATION, SPI_SETCLIENTAREAANIMATION,
+    SPI_SETCOMBOBOXANIMATION, SPI_SETLISTBOXSMOOTHSCROLLING, SPI_SETMENUANIMATION,
+    SPI_SETSCREENSAVEACTIVE, SPI_SETSCREENSAVETIMEOUT, SPI_SETSELECTIONFADE,
+    SPI_SETTOOLTIPANIMATION, SPI_SETUIEFFECTS, SPIF_SENDCHANGE, SPIF_UPDATEINIFILE, SW_SHOWNORMAL,
+    SendMessageTimeoutW, SystemParametersInfoW, WM_SETTINGCHANGE,
 };
 
 use crate::platform::{CmdOutput, LocalUserInfo, RegHive, RegValue, SystemOps};
@@ -183,6 +187,24 @@ impl SystemOps for Win32SystemOps {
             ));
         }
         dirs
+    }
+
+    fn list_dir_files(&self, dir: &Path) -> Result<Vec<String>> {
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e).with_context(|| format!("read startup dir {}", dir.display())),
+        };
+        let mut names = Vec::new();
+        for entry in entries.flatten() {
+            if entry.path().is_file()
+                && let Some(name) = entry.file_name().to_str()
+                && !name.eq_ignore_ascii_case("desktop.ini")
+            {
+                names.push(name.to_string());
+            }
+        }
+        Ok(names)
     }
 
     fn read_file_opt(&self, path: &Path) -> Result<Option<Vec<u8>>> {
@@ -528,28 +550,30 @@ impl SystemOps for Win32SystemOps {
     }
 
     fn broadcast_setting_change(&self) -> Result<()> {
-        let area = to_wide_null("Environment");
+        self.apply_live_ui_parameters();
+        const AREAS: &[&str] = &[
+            "Environment",
+            "Policy",
+            "ImmersiveColorSet",
+            "WindowMetrics",
+            "TraySettings",
+            r"Control Panel\Desktop",
+            r"Control Panel\Keyboard",
+        ];
         let mut result: usize = 0;
         unsafe {
-            SendMessageTimeoutW(
-                HWND_BROADCAST,
-                WM_SETTINGCHANGE,
-                0 as WPARAM,
-                area.as_ptr() as LPARAM,
-                SMTO_ABORTIFHUNG,
-                500,
-                &mut result,
-            );
-            let policy = to_wide_null("Policy");
-            SendMessageTimeoutW(
-                HWND_BROADCAST,
-                WM_SETTINGCHANGE,
-                0 as WPARAM,
-                policy.as_ptr() as LPARAM,
-                SMTO_ABORTIFHUNG,
-                500,
-                &mut result,
-            );
+            for area in AREAS {
+                let wide = to_wide_null(area);
+                SendMessageTimeoutW(
+                    HWND_BROADCAST,
+                    WM_SETTINGCHANGE,
+                    0 as WPARAM,
+                    wide.as_ptr() as LPARAM,
+                    SMTO_ABORTIFHUNG,
+                    500,
+                    &mut result,
+                );
+            }
         }
         Ok(())
     }
@@ -558,6 +582,68 @@ impl SystemOps for Win32SystemOps {
         let _ = self.run_tool("taskkill.exe", &["/F", "/IM", "explorer.exe"]);
         let _ = Command::new("explorer.exe").spawn();
         Ok(())
+    }
+}
+
+impl Win32SystemOps {
+    fn apply_live_ui_parameters(&self) {
+        unsafe {
+            if let Ok(Some(RegValue::Sz(min_anim))) = self.reg_read(
+                RegHive::Hkcu,
+                r"Control Panel\Desktop\WindowMetrics",
+                "MinAnimate",
+            ) {
+                let enabled = min_anim.trim() != "0";
+                let mut anim_info = ANIMATIONINFO {
+                    cbSize: std::mem::size_of::<ANIMATIONINFO>() as u32,
+                    iMinAnimate: i32::from(enabled),
+                };
+                let flags = SPIF_UPDATEINIFILE | SPIF_SENDCHANGE;
+                SystemParametersInfoW(
+                    SPI_SETANIMATION,
+                    anim_info.cbSize,
+                    (&mut anim_info as *mut ANIMATIONINFO).cast::<std::ffi::c_void>(),
+                    flags,
+                );
+                let bool_param = usize::from(enabled) as *mut std::ffi::c_void;
+                for spi in [
+                    SPI_SETUIEFFECTS,
+                    SPI_SETCLIENTAREAANIMATION,
+                    SPI_SETMENUANIMATION,
+                    SPI_SETCOMBOBOXANIMATION,
+                    SPI_SETLISTBOXSMOOTHSCROLLING,
+                    SPI_SETTOOLTIPANIMATION,
+                    SPI_SETSELECTIONFADE,
+                ] {
+                    SystemParametersInfoW(spi, 0, bool_param, flags);
+                }
+            }
+
+            if let Ok(Some(RegValue::Sz(active))) =
+                self.reg_read(RegHive::Hkcu, r"Control Panel\Desktop", "ScreenSaveActive")
+            {
+                let enabled = active.trim() == "1";
+                SystemParametersInfoW(
+                    SPI_SETSCREENSAVEACTIVE,
+                    u32::from(enabled),
+                    std::ptr::null_mut(),
+                    SPIF_UPDATEINIFILE | SPIF_SENDCHANGE,
+                );
+            }
+
+            if let Ok(Some(RegValue::Sz(timeout))) =
+                self.reg_read(RegHive::Hkcu, r"Control Panel\Desktop", "ScreenSaveTimeOut")
+                && let Ok(secs) = timeout.trim().parse::<u32>()
+                && secs > 0
+            {
+                SystemParametersInfoW(
+                    SPI_SETSCREENSAVETIMEOUT,
+                    secs,
+                    std::ptr::null_mut(),
+                    SPIF_UPDATEINIFILE | SPIF_SENDCHANGE,
+                );
+            }
+        }
     }
 }
 
