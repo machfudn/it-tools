@@ -273,7 +273,9 @@ impl Rule for DefenderFirewallRule {
                 } else {
                     ps_out.stdout.trim().to_string()
                 };
-                if is_tamper_error(ops, &err_detail, tp_val) {
+                if is_tamper_error(ops, &err_detail, tp_val)
+                    || is_defender_unavailable_error(&err_detail)
+                {
                     tamper_notes.push(format!("Set-MpPreference: {err_detail}"));
                 } else {
                     bail!(
@@ -455,6 +457,17 @@ fn is_tamper_error(ops: &dyn SystemOps, err_msg: &str, tp_val: Option<u32>) -> b
     tp_val.is_some_and(|v| v == 5 || v != 0)
 }
 
+fn is_defender_unavailable_error(err_msg: &str) -> bool {
+    let lower = err_msg.to_ascii_lowercase();
+    lower.contains("not recognized as the name of a cmdlet")
+        || lower.contains("commandnotfoundexception")
+        || lower.contains("providerloadfailure")
+        || lower.contains("invalid class")
+        || lower.contains("invalid namespace")
+        || lower.contains("0x80041010")
+        || lower.contains("0x8004100e")
+}
+
 fn format_reg_dword(val: Option<&RegValue>) -> String {
     match val.and_then(RegValue::as_dword) {
         Some(n) => n.to_string(),
@@ -603,5 +616,133 @@ mod tests {
             Some(&false)
         );
         assert!(ops.state.borrow().firewall_rules.is_empty());
+    }
+
+    #[test]
+    fn missing_defender_cmdlet_warns_while_still_applying_firewall() {
+        struct MissingDefenderOps {
+            inner: FakeSystemOps,
+        }
+        impl SystemOps for MissingDefenderOps {
+            fn reg_read(&self, h: RegHive, p: &str, n: &str) -> Result<Option<RegValue>> {
+                self.inner.reg_read(h, p, n)
+            }
+            fn reg_write(&self, h: RegHive, p: &str, n: &str, v: RegValue) -> Result<()> {
+                self.inner.reg_write(h, p, n, v)
+            }
+            fn reg_delete_value(&self, h: RegHive, p: &str, n: &str) -> Result<()> {
+                self.inner.reg_delete_value(h, p, n)
+            }
+            fn reg_list_values(&self, h: RegHive, p: &str) -> Result<Vec<(String, RegValue)>> {
+                self.inner.reg_list_values(h, p)
+            }
+            fn reg_list_subkeys(&self, h: RegHive, p: &str) -> Result<Vec<String>> {
+                self.inner.reg_list_subkeys(h, p)
+            }
+            fn local_appdata_dir(&self) -> Option<std::path::PathBuf> {
+                self.inner.local_appdata_dir()
+            }
+            fn startup_folders(&self) -> Vec<(String, std::path::PathBuf)> {
+                self.inner.startup_folders()
+            }
+            fn read_file_opt(&self, p: &std::path::Path) -> Result<Option<Vec<u8>>> {
+                self.inner.read_file_opt(p)
+            }
+            fn write_file(&self, p: &std::path::Path, b: &[u8]) -> Result<()> {
+                self.inner.write_file(p, b)
+            }
+            fn remove_file_opt(&self, p: &std::path::Path) -> Result<()> {
+                self.inner.remove_file_opt(p)
+            }
+            fn temp_dir(&self) -> std::path::PathBuf {
+                self.inner.temp_dir()
+            }
+            fn is_process_running(&self, e: &str) -> bool {
+                self.inner.is_process_running(e)
+            }
+            fn is_admin(&self) -> bool {
+                self.inner.is_admin()
+            }
+            fn is_console_tty(&self) -> bool {
+                self.inner.is_console_tty()
+            }
+            fn current_username(&self) -> String {
+                self.inner.current_username()
+            }
+            fn os_caption(&self) -> String {
+                self.inner.os_caption()
+            }
+            fn local_timestamp_compact(&self) -> String {
+                self.inner.local_timestamp_compact()
+            }
+            fn local_timestamp_iso(&self) -> String {
+                self.inner.local_timestamp_iso()
+            }
+            fn relaunch_as_admin(&self, a: &[String]) -> Result<()> {
+                self.inner.relaunch_as_admin(a)
+            }
+            fn list_local_users(&self) -> Result<Vec<crate::platform::LocalUserInfo>> {
+                self.inner.list_local_users()
+            }
+            fn create_local_user(&self, n: &str, pw: &str) -> Result<()> {
+                self.inner.create_local_user(n, pw)
+            }
+            fn set_user_dont_expire(&self, n: &str, d: bool) -> Result<()> {
+                self.inner.set_user_dont_expire(n, d)
+            }
+            fn set_user_password(&self, n: &str, pw: &str) -> Result<()> {
+                self.inner.set_user_password(n, pw)
+            }
+            fn http_get(&self, u: &str, a: Option<&str>) -> Result<Vec<u8>> {
+                self.inner.http_get(u, a)
+            }
+            fn current_exe_path(&self) -> Result<std::path::PathBuf> {
+                self.inner.current_exe_path()
+            }
+            fn rename_file(&self, f: &std::path::Path, t: &std::path::Path) -> Result<()> {
+                self.inner.rename_file(f, t)
+            }
+            fn run_tool(&self, program: &str, args: &[&str]) -> Result<crate::platform::CmdOutput> {
+                if program.eq_ignore_ascii_case("powershell.exe")
+                    && args.iter().any(|a| a.contains("Set-MpPreference"))
+                {
+                    return Ok(crate::platform::CmdOutput {
+                        exit_code: 1,
+                        stdout: String::new(),
+                        stderr: "Set-MpPreference : The term 'Set-MpPreference' is not recognized as the name of a cmdlet.".into(),
+                    });
+                }
+                self.inner.run_tool(program, args)
+            }
+            fn broadcast_setting_change(&self) -> Result<()> {
+                self.inner.broadcast_setting_change()
+            }
+            fn restart_explorer(&self) -> Result<()> {
+                self.inner.restart_explorer()
+            }
+        }
+
+        let ops = MissingDefenderOps {
+            inner: FakeSystemOps::default(),
+        };
+        let cfg = ProfileConfig::embedded_default();
+        let mut snap = BackupSnapshot::new(&ops);
+
+        let (outcome, changes) = DefenderFirewallRule
+            .apply(&ops, &cfg, &ApplyOptions::default(), &mut snap)
+            .unwrap();
+
+        match outcome {
+            RuleOutcome::WarnTamperProtected { detail } => {
+                assert!(detail.contains("not recognized as the name of a cmdlet"));
+            }
+            other => panic!("expected WarnTamperProtected, got {other:?}"),
+        }
+        assert!(changes.iter().any(|c| c.contains("domain")));
+        assert!(changes.iter().any(|c| c.contains(ICMP_V4_ECHO_RULE)));
+        assert_eq!(
+            ops.inner.state.borrow().firewall_profiles.get("domain"),
+            Some(&true)
+        );
     }
 }

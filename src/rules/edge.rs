@@ -141,23 +141,31 @@ impl Rule for EdgeRule {
         if let Some(local_appdata) = ops.local_appdata_dir() {
             let ls_path = edge_local_state_path(&local_appdata);
             if let Some(raw) = ops.read_file_opt(&ls_path)? {
-                let doc: serde_json::Value = serde_json::from_slice(&raw).with_context(|| {
-                    format!("failed to parse Edge Local State: {}", ls_path.display())
-                })?;
-                let cur_pua = doc
-                    .get("smartscreen")
-                    .and_then(|v| v.get("pua_protection_enabled"))
-                    .and_then(|v| v.as_bool());
-                let want_pua = cfg.rules.edge.block_pua;
-                if cur_pua != Some(want_pua) {
-                    diffs.push(DiffItem {
-                        field: "Edge Local State smartscreen.pua_protection_enabled".into(),
-                        current: cur_pua.map_or_else(|| "<absent>".into(), |b| b.to_string()),
-                        target: want_pua.to_string(),
-                    });
-                    if ops.is_process_running("msedge.exe") {
+                match serde_json::from_slice::<serde_json::Value>(&raw) {
+                    Ok(doc) => {
+                        let cur_pua = doc
+                            .get("smartscreen")
+                            .and_then(|v| v.get("pua_protection_enabled"))
+                            .and_then(|v| v.as_bool());
+                        let want_pua = cfg.rules.edge.block_pua;
+                        if cur_pua != Some(want_pua) {
+                            diffs.push(DiffItem {
+                                field: "Edge Local State smartscreen.pua_protection_enabled".into(),
+                                current: cur_pua
+                                    .map_or_else(|| "<absent>".into(), |b| b.to_string()),
+                                target: want_pua.to_string(),
+                            });
+                            if ops.is_process_running("msedge.exe") {
+                                note = Some(
+                                    "msedge.exe is running; Local State update requires closing Edge"
+                                        .into(),
+                                );
+                            }
+                        }
+                    }
+                    Err(_) => {
                         note = Some(
-                            "msedge.exe is running; Local State update requires closing Edge"
+                            "Edge Local State JSON rusak/kosong; pemeriksaan file Local State dilewati (policy Registry tetap dipantau)"
                                 .into(),
                         );
                     }
@@ -202,10 +210,18 @@ impl Rule for EdgeRule {
         if let Some(local_appdata) = ops.local_appdata_dir() {
             let ls_path = edge_local_state_path(&local_appdata);
             if let Some(raw) = ops.read_file_opt(&ls_path)? {
-                let mut doc: serde_json::Value =
-                    serde_json::from_slice(&raw).with_context(|| {
-                        format!("failed to parse Edge Local State: {}", ls_path.display())
-                    })?;
+                let mut doc: serde_json::Value = match serde_json::from_slice(&raw) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        return Ok((
+                            RuleOutcome::WarnEdgeRunning {
+                                detail: "Edge Local State JSON rusak/kosong; policy Registry diterapkan, pembaruan Local State dilewati"
+                                    .into(),
+                            },
+                            changes,
+                        ));
+                    }
+                };
                 let want_pua = cfg.rules.edge.block_pua;
                 let cur_pua = doc
                     .get("smartscreen")
@@ -432,5 +448,33 @@ mod tests {
         let doc: serde_json::Value =
             serde_json::from_slice(&ops.read_file_opt(&ls_path).unwrap().unwrap()).unwrap();
         assert_eq!(doc["smartscreen"]["pua_protection_enabled"], false);
+    }
+
+    #[test]
+    fn corrupted_local_state_warns_without_failing_registry_policies() {
+        let ops = FakeSystemOps::default();
+        let ls_path = edge_local_state_path(&ops.local_appdata_dir().unwrap());
+        ops.seed_file(&ls_path, b"");
+
+        let cfg = ProfileConfig::embedded_default();
+        let chk = EdgeRule.check(&ops, &cfg).unwrap();
+        assert_eq!(chk.status, CheckStatus::Drifted);
+        assert!(
+            chk.note
+                .as_deref()
+                .is_some_and(|n| n.contains("rusak/kosong"))
+        );
+
+        let mut snap = BackupSnapshot::new(&ops);
+        let (outcome, changes) = EdgeRule
+            .apply(&ops, &cfg, &ApplyOptions::default(), &mut snap)
+            .unwrap();
+        assert!(matches!(outcome, RuleOutcome::WarnEdgeRunning { .. }));
+        assert_eq!(changes.len(), 7);
+        assert_eq!(
+            ops.reg_read(RegHive::Hklm, EDGE_POLICY_PATH, "SmartScreenPuaEnabled")
+                .unwrap(),
+            Some(RegValue::Dword(1))
+        );
     }
 }

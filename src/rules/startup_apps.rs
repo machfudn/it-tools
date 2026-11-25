@@ -118,22 +118,48 @@ fn collect_entries(ops: &dyn SystemOps) -> Result<Vec<StartupEntry>> {
 
         out.extend(run_map.into_values());
 
-        let mut folder_entries: Vec<(String, RegValue)> = ops
-            .reg_list_values(hive, APPROVED_FOLDER_PATH)?
-            .into_iter()
-            .filter(|(n, _)| !n.is_empty())
-            .collect();
-        folder_entries.sort_by_key(|a| a.0.to_ascii_lowercase());
-
-        for (name, val) in folder_entries {
-            out.push(StartupEntry {
-                hive,
-                approved_path: APPROVED_FOLDER_PATH,
-                target_name: name,
-                command: None,
-                approved_val: Some(val),
-            });
+        let mut folder_map: BTreeMap<String, StartupEntry> = BTreeMap::new();
+        for (name, val) in ops.reg_list_values(hive, APPROVED_FOLDER_PATH)? {
+            if name.is_empty() {
+                continue;
+            }
+            let key = name.to_ascii_lowercase();
+            folder_map.insert(
+                key,
+                StartupEntry {
+                    hive,
+                    approved_path: APPROVED_FOLDER_PATH,
+                    target_name: name,
+                    command: None,
+                    approved_val: Some(val),
+                },
+            );
         }
+
+        let target_scope = match hive {
+            RegHive::Hkcu => "user",
+            RegHive::Hklm => "common",
+        };
+        for (scope, dir) in ops.startup_folders() {
+            if !scope.eq_ignore_ascii_case(target_scope) {
+                continue;
+            }
+            for fname in ops.list_dir_files(&dir)? {
+                if fname.is_empty() || fname.eq_ignore_ascii_case("desktop.ini") {
+                    continue;
+                }
+                let key = fname.to_ascii_lowercase();
+                folder_map.entry(key).or_insert(StartupEntry {
+                    hive,
+                    approved_path: APPROVED_FOLDER_PATH,
+                    target_name: fname,
+                    command: None,
+                    approved_val: None,
+                });
+            }
+        }
+
+        out.extend(folder_map.into_values());
     }
 
     Ok(out)
@@ -473,6 +499,109 @@ mod tests {
                 .as_bytes()
                 .unwrap(),
             enabled_folder.to_vec()
+        );
+    }
+
+    #[test]
+    fn missing_allowlist_app_and_empty_folders_stay_compliant() {
+        let ops = FakeSystemOps::default();
+        let cfg = ProfileConfig::embedded_default();
+
+        // No OpenVPN GUI, no SecurityHealth, and empty physical startup folders
+        let chk = StartupAppsRule.check(&ops, &cfg).unwrap();
+        assert_eq!(chk.status, CheckStatus::Compliant);
+        assert!(chk.diffs.is_empty());
+
+        let mut snap = BackupSnapshot::new(&ops);
+        let (outcome, changes) = StartupAppsRule
+            .apply(&ops, &cfg, &ApplyOptions::default(), &mut snap)
+            .unwrap();
+        assert_eq!(outcome, RuleOutcome::AlreadyCompliant);
+        assert!(changes.is_empty());
+        assert!(snap.is_empty());
+    }
+
+    #[test]
+    fn physical_startup_folder_shortcuts_detected_and_disabled_while_allowlist_preserved() {
+        let ops = FakeSystemOps::default();
+        let cfg = ProfileConfig::embedded_default();
+        let (user_dir, common_dir) = {
+            let st = ops.state.borrow();
+            (st.user_startup_dir.clone(), st.common_startup_dir.clone())
+        };
+
+        // Seed physical files in Startup folders WITHOUT existing StartupApproved registry entries
+        ops.seed_file(&user_dir.join("desktop.ini"), b"[.ShellClassInfo]");
+        ops.seed_file(&user_dir.join("OpenVPN GUI.lnk"), b"lnk");
+        ops.seed_file(&user_dir.join("test-dummy.lnk"), b"lnk");
+        ops.seed_file(&common_dir.join("BloatUpdater.lnk"), b"lnk");
+
+        let chk = StartupAppsRule.check(&ops, &cfg).unwrap();
+        assert_eq!(chk.status, CheckStatus::Drifted);
+        assert_eq!(chk.diffs.len(), 2);
+        assert!(
+            chk.diffs
+                .iter()
+                .any(|d| d.field.to_ascii_lowercase().ends_with(r"\test-dummy.lnk"))
+        );
+        assert!(
+            chk.diffs
+                .iter()
+                .any(|d| d.field.to_ascii_lowercase().ends_with(r"\bloatupdater.lnk"))
+        );
+
+        let mut snap = BackupSnapshot::new(&ops);
+        let (outcome, changes) = StartupAppsRule
+            .apply(&ops, &cfg, &ApplyOptions::default(), &mut snap)
+            .unwrap();
+        assert_eq!(outcome, RuleOutcome::Applied);
+        assert_eq!(changes.len(), 2);
+
+        // Allowlisted shortcut and desktop.ini must stay absent from StartupApproved
+        assert!(
+            ops.reg_read(RegHive::Hkcu, APPROVED_FOLDER_PATH, "OpenVPN GUI.lnk")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            ops.reg_read(RegHive::Hkcu, APPROVED_FOLDER_PATH, "desktop.ini")
+                .unwrap()
+                .is_none()
+        );
+
+        // Non-allowlisted shortcuts are disabled via StartupApproved\StartupFolder
+        assert_eq!(
+            ops.reg_read(RegHive::Hkcu, APPROVED_FOLDER_PATH, "test-dummy.lnk")
+                .unwrap()
+                .unwrap()
+                .as_bytes()
+                .unwrap()[0],
+            0x03
+        );
+        assert_eq!(
+            ops.reg_read(RegHive::Hklm, APPROVED_FOLDER_PATH, "BloatUpdater.lnk")
+                .unwrap()
+                .unwrap()
+                .as_bytes()
+                .unwrap()[0],
+            0x03
+        );
+
+        // Re-check is compliant, rollback deletes newly added StartupApproved entries cleanly
+        assert_eq!(
+            StartupAppsRule.check(&ops, &cfg).unwrap().status,
+            CheckStatus::Compliant
+        );
+        rollback_snapshot(&ops, &snap).unwrap();
+        assert!(
+            ops.reg_read(RegHive::Hkcu, APPROVED_FOLDER_PATH, "test-dummy.lnk")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            ops.reg_read(RegHive::Hklm, APPROVED_FOLDER_PATH, "BloatUpdater.lnk")
+                .unwrap()
+                .is_none()
         );
     }
 }

@@ -34,6 +34,10 @@ impl Rule for PasswordPolicyRule {
         cfg.rules.password_policy.enabled
     }
 
+    fn handles_user_target(&self) -> bool {
+        true
+    }
+
     fn check(&self, ops: &dyn SystemOps, cfg: &ProfileConfig) -> Result<RuleCheck> {
         let pp = &cfg.rules.password_policy;
         if !ops.is_admin() {
@@ -162,13 +166,13 @@ impl Rule for PasswordPolicyRule {
     }
 }
 
-fn desired_system_access(pp: &PasswordPolicyConfig) -> [(&'static str, String); 8] {
+fn desired_system_access(pp: &PasswordPolicyConfig) -> Vec<(&'static str, String)> {
     let max_age = if pp.max_password_age_days == 0 {
         "-1".to_string()
     } else {
         pp.max_password_age_days.to_string()
     };
-    [
+    let mut items = vec![
         ("PasswordHistorySize", pp.password_history.to_string()),
         ("MaximumPasswordAge", max_age),
         ("MinimumPasswordLength", pp.min_password_length.to_string()),
@@ -177,18 +181,22 @@ fn desired_system_access(pp: &PasswordPolicyConfig) -> [(&'static str, String); 
             if pp.complexity_enabled { "1" } else { "0" }.into(),
         ),
         ("LockoutBadCount", pp.lockout_threshold.to_string()),
-        ("LockoutDuration", pp.lockout_duration_min.to_string()),
-        ("ResetLockoutCount", pp.lockout_reset_min.to_string()),
         (
             "AllowAdministratorLockout",
             if pp.allow_admin_lockout { "1" } else { "0" }.into(),
         ),
-    ]
+    ];
+    // Windows secedit omits duration/reset keys when lockout is disabled (threshold == 0).
+    if pp.lockout_threshold > 0 {
+        items.push(("LockoutDuration", pp.lockout_duration_min.to_string()));
+        items.push(("ResetLockoutCount", pp.lockout_reset_min.to_string()));
+    }
+    items
 }
 
 fn compute_diffs(
     current: &BTreeMap<String, String>,
-    desired: &[(&'static str, String); 8],
+    desired: &[(&'static str, String)],
 ) -> Vec<DiffItem> {
     let mut diffs = Vec::new();
     for (key, target) in desired {
@@ -293,9 +301,9 @@ fn parse_system_access(inf: &str) -> BTreeMap<String, String> {
     map
 }
 
-fn patch_system_access_inf(inf: &str, desired: &[(&'static str, String); 8]) -> String {
+fn patch_system_access_inf(inf: &str, desired: &[(&'static str, String)]) -> String {
     let mut out_lines: Vec<String> = Vec::new();
-    let mut written = [false; 8];
+    let mut written = vec![false; desired.len()];
     let mut in_sys = false;
     let mut saw_sys = false;
 
@@ -349,8 +357,8 @@ fn patch_system_access_inf(inf: &str, desired: &[(&'static str, String); 8]) -> 
 
 fn append_missing_keys(
     out_lines: &mut Vec<String>,
-    desired: &[(&'static str, String); 8],
-    written: &mut [bool; 8],
+    desired: &[(&'static str, String)],
+    written: &mut [bool],
 ) {
     for (idx, (k, v)) in desired.iter().enumerate() {
         if !written[idx] {
@@ -622,5 +630,35 @@ mod tests {
         assert_eq!(info.name, "Operator");
         assert!(!info.dont_expire_password);
         assert_eq!(pw, create_pw);
+    }
+
+    #[test]
+    fn lockout_threshold_zero_omits_duration_and_stays_idempotent() {
+        let ops = FakeSystemOps::default();
+        {
+            let mut st = ops.state.borrow_mut();
+            st.system_access.remove("LockoutDuration");
+            st.system_access.remove("ResetLockoutCount");
+            st.system_access
+                .insert("LockoutBadCount".into(), "0".into());
+        }
+        let mut cfg = ProfileConfig::embedded_default();
+        cfg.rules.password_policy.lockout_threshold = 0;
+
+        let mut snap = BackupSnapshot::new(&ops);
+        let (outcome, _) = PasswordPolicyRule
+            .apply(&ops, &cfg, &ApplyOptions::default(), &mut snap)
+            .unwrap();
+        assert_eq!(outcome, RuleOutcome::Applied);
+
+        // Simulate real Windows secedit omitting LockoutDuration/ResetLockoutCount when threshold == 0
+        {
+            let mut st = ops.state.borrow_mut();
+            st.system_access.remove("LockoutDuration");
+            st.system_access.remove("ResetLockoutCount");
+        }
+        let chk = PasswordPolicyRule.check(&ops, &cfg).unwrap();
+        assert_eq!(chk.status, CheckStatus::Compliant);
+        assert!(chk.diffs.is_empty());
     }
 }
