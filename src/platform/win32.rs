@@ -232,6 +232,26 @@ impl SystemOps for Win32SystemOps {
         }
     }
 
+    fn dir_exists(&self, path: &Path) -> Result<bool> {
+        Ok(path.is_dir())
+    }
+
+    fn create_dir_all(&self, path: &Path) -> Result<()> {
+        fs::create_dir_all(path).with_context(|| format!("create dir {}", path.display()))
+    }
+
+    fn remove_empty_dir(&self, path: &Path) -> Result<bool> {
+        match fs::remove_dir(path) {
+            Ok(()) => Ok(true),
+            Err(e)
+                if e.kind() == ErrorKind::NotFound || e.kind() == ErrorKind::DirectoryNotEmpty =>
+            {
+                Ok(false)
+            }
+            Err(e) => Err(e).with_context(|| format!("remove dir {}", path.display())),
+        }
+    }
+
     fn http_get(&self, url: &str, accept: Option<&str>) -> Result<Vec<u8>> {
         winhttp_get(url, accept)
     }

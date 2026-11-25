@@ -36,6 +36,7 @@ pub struct FakeState {
     pub running_processes: BTreeSet<String>,
     pub registry: BTreeMap<(RegHive, String), BTreeMap<String, (String, RegValue)>>,
     pub files: BTreeMap<String, Vec<u8>>,
+    pub dirs: BTreeSet<String>,
     pub users: BTreeMap<String, (LocalUserInfo, String)>,
     pub power_schemes: BTreeMap<String, FakePowerScheme>,
     pub active_scheme: String,
@@ -124,6 +125,7 @@ impl Default for FakeState {
             running_processes: BTreeSet::new(),
             registry: BTreeMap::new(),
             files: BTreeMap::new(),
+            dirs: BTreeSet::new(),
             users,
             power_schemes,
             active_scheme: balanced,
@@ -290,16 +292,78 @@ impl SystemOps for FakeSystemOps {
     }
 
     fn write_file(&self, path: &Path, bytes: &[u8]) -> Result<()> {
-        self.state
-            .borrow_mut()
-            .files
-            .insert(Self::norm_file(path), bytes.to_vec());
+        let norm = Self::norm_file(path);
+        let mut st = self.state.borrow_mut();
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            let p_norm = Self::norm_file(parent);
+            if p_norm.len() > 3 {
+                st.dirs.insert(p_norm);
+            }
+        }
+        st.files.insert(norm, bytes.to_vec());
         Ok(())
     }
 
     fn remove_file_opt(&self, path: &Path) -> Result<()> {
         self.state.borrow_mut().files.remove(&Self::norm_file(path));
         Ok(())
+    }
+
+    fn dir_exists(&self, path: &Path) -> Result<bool> {
+        let norm = Self::norm_file(path);
+        let st = self.state.borrow();
+        if st.dirs.contains(&norm) {
+            return Ok(true);
+        }
+        let prefix = if norm.ends_with('\\') {
+            norm
+        } else {
+            format!("{norm}\\")
+        };
+        Ok(st.files.keys().any(|k| k.starts_with(&prefix)))
+    }
+
+    fn create_dir_all(&self, path: &Path) -> Result<()> {
+        let norm = Self::norm_file(path);
+        let mut st = self.state.borrow_mut();
+        if st.files.contains_key(&norm) {
+            bail!("path '{}' already exists as a file", path.display());
+        }
+        let mut cur = Some(path);
+        while let Some(p) = cur {
+            let p_norm = Self::norm_file(p);
+            if p_norm.len() <= 3 {
+                break;
+            }
+            if st.files.contains_key(&p_norm) {
+                bail!("ancestor '{}' already exists as a file", p.display());
+            }
+            st.dirs.insert(p_norm);
+            cur = p.parent();
+        }
+        Ok(())
+    }
+
+    fn remove_empty_dir(&self, path: &Path) -> Result<bool> {
+        let norm = Self::norm_file(path);
+        let mut st = self.state.borrow_mut();
+        if !st.dirs.contains(&norm) {
+            return Ok(false);
+        }
+        let prefix = if norm.ends_with('\\') {
+            norm.clone()
+        } else {
+            format!("{norm}\\")
+        };
+        let has_children = st.files.keys().any(|k| k.starts_with(&prefix))
+            || st.dirs.iter().any(|d| d.starts_with(&prefix));
+        if has_children {
+            return Ok(false);
+        }
+        st.dirs.remove(&norm);
+        Ok(true)
     }
 
     fn temp_dir(&self) -> PathBuf {

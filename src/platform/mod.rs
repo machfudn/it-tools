@@ -76,6 +76,18 @@ pub trait SystemOps {
         let _ = dir;
         Ok(Vec::new())
     }
+    fn dir_exists(&self, path: &Path) -> Result<bool> {
+        let _ = path;
+        Ok(false)
+    }
+    fn create_dir_all(&self, path: &Path) -> Result<()> {
+        let _ = path;
+        Ok(())
+    }
+    fn remove_empty_dir(&self, path: &Path) -> Result<bool> {
+        let _ = path;
+        Ok(false)
+    }
     fn read_file_opt(&self, path: &Path) -> Result<Option<Vec<u8>>>;
     fn write_file(&self, path: &Path, bytes: &[u8]) -> Result<()>;
     fn remove_file_opt(&self, path: &Path) -> Result<()>;
